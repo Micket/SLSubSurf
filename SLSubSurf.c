@@ -31,8 +31,8 @@ int SL_giveNumberOfInternalFaceNodes(int subdivLevel, SLFace *face) {
     } else { // For anything higher, replicate Catmull-Clark
         // Only correct for subdivlevel > 0;
         int en = SL_giveNumberOfInternalEdgeNodes(subdivLevel);
-        // One subgrid for each vertex;
-        return 1 + en * face->numVerts;
+        //return 1 + en * face->numVerts;
+        return en * en;
     }
 }
 
@@ -126,7 +126,17 @@ static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss)
 // Misc helpers
 
 static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
-    // TODO: Just loop and compare, for any reasonable mesh the number of edges should be very few.
+    LinkNode *edge0 = v0->edges;
+    for (int i = 0; i < v0->numEdges; i++) {
+        LinkNode *edge1 = v1->edges;
+        for (int j = 0; j < v1->numEdges; j++) {
+            if ( edge0->link == edge1->link) {
+                return (SLEdge*)edge0->link;
+            }
+            edge1 = edge1->next;
+        }
+        edge0 = edge0->next;
+    }
     return NULL; 
 }
 
