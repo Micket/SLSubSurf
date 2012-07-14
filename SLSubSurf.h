@@ -14,6 +14,9 @@
   0. You just DO WHAT THE FUCK YOU WANT TO. 
 */
 
+#include "BLI_linklist.h"
+#include "BLI_ghash.h"
+
 typedef struct SLSubSurf SLSubSurf;
 typedef struct SLFace SLFace;
 typedef struct SLEdge SLEdge;
@@ -27,15 +30,14 @@ typedef struct SLVert SLVert;
 
 
 struct SLVert {
-    SLVert *next; // Linked list
+    int hashkey;
     double coords[3]; // Initial coordinate
 
-    SLEdge **edges;
-    SLFace **faces;
-
+    LinkNode *edges;
+    LinkNode *faces;
     unsigned short numEdges, numFaces;
+
     unsigned short requiresUpdate;
-    
     float crease; // Support node creases as well (why not?)
 
     // Smoothed position;
@@ -43,9 +45,10 @@ struct SLVert {
 };
 
 struct SLEdge {
-    SLEdge *next; // Linked list
+    int hashkey;
+
     SLVert *v0, *v1;
-    SLFace **faces;
+    LinkNode *faces;
     unsigned short numFaces;
     unsigned short requiresUpdate;
 
@@ -57,17 +60,17 @@ struct SLEdge {
 };
 
 struct SLFace {
-    SLFace *next; // Linked list
-    SLVert **verts;
-    SLEdge **edges;
+    int hashkey;
+
+    LinkNode *verts;
+    LinkNode *edges;
     unsigned short numVerts; // note: numVerts same as numEdges
     unsigned short requiresUpdate;
-
 
     double centroid[3];
  
     // The subdivided data (internal to face, excluding initial edges)
-     // Size is implicitly defined from the subdivlevel.
+    // Size is implicitly defined from the subdivlevel.
     double *ls_coords[3];
 };
 
@@ -75,9 +78,8 @@ struct SLSubSurf {
     int subdivLevel;
     int smoothing; // Boolean, nonzero for smoothing.
 
- 	SLVert *lastVert;
-	SLEdge *lastEdge;
-	SLFace *lastFace;
+ 	GHash *verts, *edges, *faces;
+ 	GHashIterator *vertIter, *edgeIter, *faceIter;
 
     int numVerts;
     int numEdges;
@@ -99,8 +101,8 @@ void SL_SubSurf_free(SLSubSurf *ss);
 
 
 // This code basically adds verts i suppose.
-void SL_SubSurf_syncVert(SLSubSurf *ss, double coords[3], int seam);
-void SL_SubSurf_syncEdge(SLSubSurf *ss, SLVert *v0, SLVert *v1, float crease);
-void SL_SubSurf_syncFace(SLSubSurf *ss, int numVerts, SLVert **vs);
+void SL_SubSurf_syncVert(SLSubSurf *ss, void* hashkey, double coords[3], int seam);
+void SL_SubSurf_syncEdge(SLSubSurf *ss, void* hashkey, SLVert *v0, SLVert *v1, float crease);
+void SL_SubSurf_syncFace(SLSubSurf *ss, void* hashkey, int numVerts, SLVert **vs);
 
 

@@ -14,7 +14,7 @@
   0. You just DO WHAT THE FUCK YOU WANT TO. 
 */
 
-#include "LSSurf.h"
+#include "SLSubSurf.h"
 #include "stdlib.h"
 
 /////////////////////////////////////////////////////////////
@@ -51,10 +51,10 @@ int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss) {
     // Simple things first, corners and interpolated edge verts;
     int totNodes = ss->numVerts + ss->numEdges * ( SL_giveNumberOfSubEdges(ss->subdivLevel) - 1 );
     // Then faces, which varies;
-    SLFace *face = ss->lastFace;
+    BLI_ghashIterator_init(ss->faceIter, ss->faces);
     for (int i = 0; i < ss->numFaces; i++) {
-        totNodes += SL_giveNumberOfInternalFaceNodes(ss->subdivLevel, face);
-        face = face->next;
+        totNodes += SL_giveNumberOfInternalFaceNodes(ss->subdivLevel, (SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
+        BLI_ghashIterator_step(ss->faceIter);
     }
     return totNodes;
 }
@@ -87,12 +87,12 @@ void SL_SubSurf_free(SLSubSurf *ss) {
 
 static void _vertAddFace(SLVert *v, SLFace *f, SLSubSurf *ss)
 {
-    // TODO Some linked-list thing here
+    BLI_linklist_prepend(&v->faces, f); // Am I using it correctly?!
     v->numFaces++;
 }
 static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss)
 {
-    // Some linked-list thing here
+    //BLI_linklist_remove(&v->faces, f);
     v->numFaces--;
 }
 
@@ -100,12 +100,12 @@ static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss)
 
 static void _vertAddEdge(SLVert *v, SLEdge *e, SLSubSurf *ss)
 {
-    // Some linked-list thing here
+    BLI_linklist_prepend(&v->edges, e);
     v->numEdges++;
 }
 static void _vertRemoteEdge(SLVert *v, SLEdge *e, SLSubSurf *ss)
 {
-    // Some linked-list thing here
+    //BLI_linklist_remove(&v->edges, e);
     v->numEdges--;
 }
 
@@ -113,12 +113,12 @@ static void _vertRemoteEdge(SLVert *v, SLEdge *e, SLSubSurf *ss)
 
 static void _edgeAddFace(SLEdge *e, SLFace *f, SLSubSurf *ss)
 {
-    // Some linked-list thing here
+    BLI_linklist_prepend(&e->faces, f);
     e->numFaces++;
 }
 static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss)
 {
-    // Some linked-list thing here
+    //BLI_linklist_remove(&e->faces, f);
     e->numFaces--;
 }
 
@@ -133,7 +133,7 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 /////////////////////////////////////////////////////////////
 // Note! Must be added as verts, then edges, then faces. 
 
-void SL_SubSurf_syncVert(SLSubSurf *ss, double coords[3], int seam) {
+void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, double coords[3], int seam) {
     // Naive code for now, should use a hashmap of some sort.
     SLVert *vert = malloc(sizeof(SLVert));
     vert->coords[0] = coords[0];
@@ -141,64 +141,56 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, double coords[3], int seam) {
     vert->coords[2] = coords[2];
     vert->numFaces = 0;
     vert->numEdges = 0;
+    vert->requiresUpdate = 1;
     
-
-    // Append to the linked list;
-    vert->next = ss->lastVert;
-    ss->lastVert->next = vert;
-    ss->lastVert = vert;
+    // Add to hashmap
+    BLI_ghash_insert(ss->verts, hashkey, vert);
 }
 
-void SL_SubSurf_syncEdge(SLSubSurf *ss, SLVert *v0, SLVert *v1, float crease) {
+void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, SLVert *v0, SLVert *v1, float crease) {
     // Naive code for now, should use a hashmap of some sort.
     SLEdge *edge = malloc(sizeof(SLEdge));
 
-    edge->crease = crease;
     edge->v0 = v0;
     edge->v1 = v1;
+    edge->crease = crease;
+    edge->requiresUpdate = 1;
 
     _vertAddEdge(v0, edge, ss);
     _vertAddEdge(v1, edge, ss);
 
-    // Append to the linked list;
-    edge->next = ss->lastEdge;
-    ss->lastEdge->next = edge;
-    ss->lastEdge = edge;
+    // Add to hashmap
+    BLI_ghash_insert(ss->edges, hashkey, edge);
 }
 
-void SL_SubSurf_syncFace(SLSubSurf *ss, int numVerts, SLVert **vs) {
+void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs) {
     // Naive code for now, should use a hashmap of some sort, not just a simple linked list.
 
-    // New edge? Then;
+    // New face? Then;
     SLEdge *edge;
     SLFace *face = malloc(sizeof(SLFace));
 
-    face->verts = (SLVert**)malloc(sizeof(SLVert*)*numVerts);
-    face->edges = (SLEdge**)malloc(sizeof(SLEdge*)*numVerts);
+    // Static lists for faces maybe?
+    //face->verts = (SLVert**)malloc(sizeof(SLVert*)*numVerts);
+    //face->edges = (SLEdge**)malloc(sizeof(SLEdge*)*numVerts);
+    // Allocate memory;
+    //face->edges = (SLEdge**)malloc(sizeof(SLEdge*)*numVerts);
+
+    face->numVerts = numVerts;
+    face->requiresUpdate = 1;
 
     for (int i = 0; i < numVerts; i++) {
         // Verts
-        face->verts[i] = vs[i];
+        BLI_linklist_prepend(&face->verts, vs[i]);
         _vertAddFace(vs[i], face, ss);
         // Then edges
         edge = _sharedEdge(vs[i], vs[(i+1) % numVerts]);
-        face->edges[i] = edge;
+        BLI_linklist_prepend(&face->edges, edge);
         _edgeAddFace(edge, face, ss);
     }
     
-    // Append to the linked list;
-    face->next = ss->lastFace;
-    ss->lastFace->next = face;
-    ss->lastFace = face;
-
-    // Compute centroid, used for smoothing and other things;
-    double weight = 1.0 / face->numVerts;
-    face->centroid[0] = face->centroid[1] = face->centroid[2] = 0.0;
-    for (int i = 0; i < face->numVerts; i++) {
-        face->centroid[0] += weight*face->verts[i]->coords[0];
-        face->centroid[1] += weight*face->verts[i]->coords[1];
-        face->centroid[2] += weight*face->verts[i]->coords[2];
-    }
+    // Add to hashmap
+    BLI_ghash_insert(ss->faces, hashkey, face);
 }
 
 /////////////////////////////////////////////////////////////
@@ -208,39 +200,42 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     SLFace *face;
     SLEdge *edge;
     SLVert *vert;
+    LinkNode *temp;
     double weight;
     double s0, s1, s2; // Interpolated coordinates;
     int intEdgeNodes;
 
     // Compute centroid, used for smoothing and other things;
-    face = ss->lastFace;
+    BLI_ghashIterator_init(ss->faceIter, ss->faces);
     for (int i = 0; i < ss->numFaces; i++) {
+        face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
         weight = 1.0 / face->numVerts;
         face->centroid[0] = face->centroid[1] = face->centroid[2] = 0.0;
-        for (int i = 0; i < face->numVerts; i++) {
-            face->centroid[0] += weight*face->verts[i]->coords[0];
-            face->centroid[1] += weight*face->verts[i]->coords[1];
-            face->centroid[2] += weight*face->verts[i]->coords[2];
+        for (int j = 0; j < face->numVerts; j++) {
+            temp = face->verts;
+            for (int x = 0; x < 3; x++) {
+                face->centroid[x] += weight*((SLVert*)temp->link)->coords[x];
+                temp = temp->next;
+            }
         }
-
-        face = face->next;
+        BLI_ghashIterator_step(ss->faceIter);
     }
 
     // Loop over vertices
-    vert = ss->lastVert;
+    BLI_ghashIterator_init(ss->vertIter, ss->verts);
     for (int i = 0; i < ss->numEdges; i++) {
+        vert = (SLVert*)BLI_ghashIterator_getValue(ss->vertIter);
         // TODO: Actually do the smoothing part...
         for (int x = 0; x < 3; x++) 
             vert->ls_coords[x] = vert->coords[x];
-        vert = vert->next;
+        BLI_ghashIterator_step(ss->vertIter);
     }
 
-
-
     // Loop over edges;
+    BLI_ghashIterator_init(ss->edgeIter, ss->edges);
     intEdgeNodes = SL_giveNumberInternalEdgeNodes(ss->subdivLevel);
-    edge = ss->lastEdge;
     for (int i = 0; i < ss->numEdges; i++) {
+        edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
         // Loop and create the interpolated coordinates
         // TODO: Actually do the smoothing part...
         for (int j = 1; j <= intEdgeNodes; j++) {
@@ -248,14 +243,19 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
             for (int x = 0; x < 3; x++)
                 edge->ls_coords[i][x] = (1-s0)*edge->v0->coords[x] + s0*edge->v1->coords[x];
         }
-
-        edge = edge->next;
+        BLI_ghashIterator_step(ss->edgeIter);
     }
 
-
-
-    face = ss->lastFace;
+    BLI_ghashIterator_init(ss->faceIter, ss->faces);
     for (int i = 0; i < ss->numFaces; i++) {
+        face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
+        SLVert *v0, *v1, *v2;
+        temp = face->verts;
+        v0 = (SLVert*)temp->link;
+        temp = temp->next;
+        v1 = (SLVert*)temp->link;
+        temp = temp->next;
+        v2 = (SLVert*)temp->link;
         // Loop and create the interpolated coordinates
         // TODO: Deal with more than just triangles...
         // TODO: Actually do the smoothing part...
@@ -267,13 +267,13 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
                 s2 = 1.0 - s1 - s2; // Trenary coordinates
 
                 for (int x = 0; x < 3; x++) 
-                    face->ls_coords[k][x] = s0*face->verts[0]->coords[x] + 
-                                            s1*face->verts[1]->coords[x] + 
-                                            s2*face->verts[2]->coords[x];
+                    face->ls_coords[k][x] = s0*v0->coords[x] + 
+                                            s1*v1->coords[x] + 
+                                            s2*v2->coords[x];
                 k++;
             }
         }
-        face = face->next;
+        BLI_ghashIterator_step(ss->faceIter);
     }
 }
 
