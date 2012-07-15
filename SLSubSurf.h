@@ -41,7 +41,7 @@ struct SLVert {
     float crease; // Support node creases as well (why not?)
 
     // Smoothed position;
-    double ls_coords[3];
+    double sl_coords[3];
 };
 
 struct SLEdge {
@@ -54,9 +54,8 @@ struct SLEdge {
 
     float crease;
 
-    // The subdivided data below (node positions)
-     // Size is implicitly defined from the subdivlevel.
-    double *ls_coords[3];
+    // Center node position
+    double sl_coords[3];
 };
 
 struct SLFace {
@@ -68,14 +67,10 @@ struct SLFace {
     unsigned short requiresUpdate;
 
     double centroid[3];
- 
-    // The subdivided data (internal to face, excluding initial edges)
-    // Size is implicitly defined from the subdivlevel.
-    double *ls_coords[3];
+    double sl_centroid[3]; // Unused for triangles;
 };
 
 struct SLSubSurf {
-    int subdivLevel;
     int smoothing; // Boolean, nonzero for smoothing.
 
  	GHash *verts, *edges, *faces;
@@ -86,17 +81,16 @@ struct SLSubSurf {
     int numFaces;
 };
 
-int SL_giveNumberOfSubFaces(int subdivLevel, SLFace *face);
-int SL_giveNumberOfInternalFaceNodes(int subdivLevel, SLFace *face);
-int SL_giveNumberOfSubEdges(int subdivLevel);
-int SL_giveNumberOfInternalEdgeNodes(int subdivLevel);
+int SL_giveNumberOfInternalFaces(SLFace *face);
+int SL_giveNumberOfInternalNodes(SLFace *face);
+int SL_giveNumberOfInternalEdges(SLFace *face);
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss);
 
 
-SLSubSurf* SL_SubSurf_new(int subdivisionLevels, int smoothing); // Allocators here? 
+SLSubSurf* SL_SubSurf_new(int smoothing); // Allocators here? 
 void SL_SubSurf_free(SLSubSurf *ss);
 
 

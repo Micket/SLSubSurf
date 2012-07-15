@@ -18,61 +18,58 @@
 #include "stdlib.h"
 
 /////////////////////////////////////////////////////////////
-// Support functions
+// Support functions for faces;
 
-int SL_giveNumberOfSubFaces(int subdivLevel, SLFace *face) {
-    return (1 << (subdivLevel << 1)); // 4^s = 2^(2*s) (correct for quads and tris, not sure how to deal with larger polygons)
+int SL_giveNumberOfInternalFaces(SLFace *face) {
+    // Undecided on how anything above quads should be subdivided. Default Catmull-Clark behavior seems reasonable.
+    return (face->numVerts == 3) ? 4 : face->numVerts;
 }
 
-int SL_giveNumberOfInternalFaceNodes(int subdivLevel, SLFace *face) {
-    if (face->numVerts == 3) { // Triangles are special
-        int e = 1 << subdivLevel;
-        return ( (e - 2) * (e - 1) ) >> 1;
-    } else { // For anything higher, replicate Catmull-Clark
-        // Only correct for subdivlevel > 0;
-        int en = SL_giveNumberOfInternalEdgeNodes(subdivLevel);
-        //return 1 + en * face->numVerts;
-        return en * en;
-    }
+int SL_giveNumberOfInternalNodes(SLFace *face) {
+    // No center node for triangles.
+    return (face->numVerts == 3) ? 0 : 1;
 }
 
-int SL_giveNumberSubEdges(int subdivLevel) {
-    return (1 << subdivLevel); // 2^s
+int SL_giveNumberOfInternalEdges(SLFace *face) {
+    return face->numVerts;
 }
-
-int SL_giveNumberInternalEdgeNodes(int subdivLevel) {
-    return (1 << subdivLevel) - 1; // 2^s
-}
-
 
 /////////////////////////////////////////////////////////////
+// External helpers 
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss) {
     // Simple things first, corners and interpolated edge verts;
-    int totNodes = ss->numVerts + ss->numEdges * ( SL_giveNumberOfSubEdges(ss->subdivLevel) - 1 );
+    int totNodes = ss->numVerts + ss->numEdges; // One new node per edge
     // Then faces, which varies;
     BLI_ghashIterator_init(ss->faceIter, ss->faces);
     for (int i = 0; i < ss->numFaces; i++) {
-        totNodes += SL_giveNumberOfInternalFaceNodes(ss->subdivLevel, (SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
+        totNodes += SL_giveNumberOfInternalNodes((SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
         BLI_ghashIterator_step(ss->faceIter);
     }
     return totNodes;
 }
 
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss) {
-    return ss->numEdges * SL_giveNumberOfSubEdges(ss->subdivLevel);
+    return ss->numEdges * 2;
 }
 
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
     // Since we know that all subdivided elements have the same number of sub-faces;
-    return ss->numFaces * SL_giveNumberOfSubFaces(ss->subdivLevel, NULL);
+    int totFaces = 0; // One new node per edge
+    // Then faces, which varies;
+    BLI_ghashIterator_init(ss->faceIter, ss->faces);
+    for (int i = 0; i < ss->numFaces; i++) {
+        totFaces += SL_giveNumberOfInternalFaces((SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
+        BLI_ghashIterator_step(ss->faceIter);
+    }
+
+    return totFaces;
 }
 
 /////////////////////////////////////////////////////////////
 
-SLSubSurf* SL_SubSurf_new(int subdivisionLevels, int smoothing) {
+SLSubSurf* SL_SubSurf_new(int smoothing) {
     SLSubSurf *ss = (SLSubSurf*)malloc(sizeof(SLSubSurf));
-    ss->subdivLevel = subdivisionLevels;
     ss->smoothing = smoothing;
     return ss;
 }
@@ -213,7 +210,6 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     LinkNode *temp;
     double weight;
     double s0, s1, s2; // Interpolated coordinates;
-    int intEdgeNodes;
 
     // Compute centroid, used for smoothing and other things;
     BLI_ghashIterator_init(ss->faceIter, ss->faces);
@@ -237,22 +233,19 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
         vert = (SLVert*)BLI_ghashIterator_getValue(ss->vertIter);
         // TODO: Actually do the smoothing part...
         for (int x = 0; x < 3; x++) 
-            vert->ls_coords[x] = vert->coords[x];
+            vert->sl_coords[x] = vert->coords[x];
         BLI_ghashIterator_step(ss->vertIter);
     }
 
     // Loop over edges;
     BLI_ghashIterator_init(ss->edgeIter, ss->edges);
-    intEdgeNodes = SL_giveNumberInternalEdgeNodes(ss->subdivLevel);
     for (int i = 0; i < ss->numEdges; i++) {
         edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
         // Loop and create the interpolated coordinates
         // TODO: Actually do the smoothing part...
-        for (int j = 1; j <= intEdgeNodes; j++) {
-            s0 = ((double)j)/intEdgeNodes;
-            for (int x = 0; x < 3; x++)
-                edge->ls_coords[i][x] = (1-s0)*edge->v0->coords[x] + s0*edge->v1->coords[x];
-        }
+        for (int x = 0; x < 3; x++)
+            edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
+
         BLI_ghashIterator_step(ss->edgeIter);
     }
 
@@ -269,20 +262,9 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
         // Loop and create the interpolated coordinates
         // TODO: Deal with more than just triangles...
         // TODO: Actually do the smoothing part...
-        int k = 0;
-        for (int j0 = 1; j0 < intEdgeNodes; j0++) {
-            s0 = ((double)j0)/intEdgeNodes;
-            for (int j1 = 1; j1 < intEdgeNodes-j0; j1++) {
-                s1 = ((double)j1)/intEdgeNodes;
-                s2 = 1.0 - s1 - s2; // Trenary coordinates
+        for (int x = 0; x < 3; x++)
+            face->sl_centroid[x] = face->centroid[x];
 
-                for (int x = 0; x < 3; x++) 
-                    face->ls_coords[k][x] = s0*v0->coords[x] + 
-                                            s1*v1->coords[x] + 
-                                            s2*v2->coords[x];
-                k++;
-            }
-        }
         BLI_ghashIterator_step(ss->faceIter);
     }
 }
