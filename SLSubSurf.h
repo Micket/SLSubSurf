@@ -31,7 +31,7 @@ typedef struct SLVert SLVert;
 
 struct SLVert {
     int hashkey;
-    double coords[3]; // Initial coordinate
+    float coords[3]; // Initial coordinate
 
     LinkNode *edges;
     LinkNode *faces;
@@ -41,7 +41,7 @@ struct SLVert {
     float crease; // Support node creases as well (why not?)
 
     // Smoothed position;
-    double sl_coords[3];
+    float sl_coords[3];
 };
 
 struct SLEdge {
@@ -55,7 +55,7 @@ struct SLEdge {
     float crease;
 
     // Center node position
-    double sl_coords[3];
+    float sl_coords[3];
 };
 
 struct SLFace {
@@ -66,8 +66,8 @@ struct SLFace {
     unsigned short numVerts; // note: numVerts same as numEdges
     unsigned short requiresUpdate;
 
-    double centroid[3];
-    double sl_centroid[3]; // Unused for triangles;
+    float centroid[3];
+    float sl_centroid[3]; // Unused for triangles;
 };
 
 struct SLSubSurf {
@@ -95,7 +95,7 @@ void SL_SubSurf_free(SLSubSurf *ss);
 
 
 // This code basically adds verts i suppose.
-void SL_SubSurf_syncVert(SLSubSurf *ss, void* hashkey, double coords[3], int seam);
+void SL_SubSurf_syncVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
 void SL_SubSurf_syncEdge(SLSubSurf *ss, void* hashkey, SLVert *v0, SLVert *v1, float crease);
 void SL_SubSurf_syncFace(SLSubSurf *ss, void* hashkey, int numVerts, SLVert **vs);
 

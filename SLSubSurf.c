@@ -140,7 +140,7 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 /////////////////////////////////////////////////////////////
 // Note! Must be added as verts, then edges, then faces. 
 
-void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, double coords[3], int seam) {
+void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
     // Naive code for now, should use a hashmap of some sort.
     SLVert *vert = malloc(sizeof(SLVert));
     vert->coords[0] = coords[0];
@@ -208,8 +208,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     SLEdge *edge;
     SLVert *vert;
     LinkNode *temp;
-    double weight;
-    double s0, s1, s2; // Interpolated coordinates;
+    float weight;
 
     // Compute centroid, used for smoothing and other things;
     BLI_ghashIterator_init(ss->faceIter, ss->faces);
