@@ -231,7 +231,6 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     SLEdge *edge;
     SLVert *vert;
     LinkNode *temp;
-    float weight;
     float avgCrease;
     int seamCount, creaseCount;
     int seam;
@@ -240,15 +239,21 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     BLI_ghashIterator_init(ss->faceIter, ss->faces);
     for (int i = 0; i < ss->numFaces; i++) {
         face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
-        weight = 1.0 / face->numVerts;
-        face->centroid[0] = face->centroid[1] = face->centroid[2] = 0.0;
+        Vec3Zero(face->centroid);
         for (int j = 0; j < face->numVerts; j++) {
             temp = face->verts;
-            for (int x = 0; x < 3; x++) {
-                face->centroid[x] += weight*((SLVert*)temp->link)->coords[x];
-                temp = temp->next;
-            }
+            Vec3Add(face->centroid, ((SLVert*)temp->link)->coords);
+            temp = temp->next;
         }
+        Vec3Mult(face->centroid, 1.0f / face->numVerts );
+        BLI_ghashIterator_step(ss->faceIter);
+    }
+    // also for edges;
+    BLI_ghashIterator_init(ss->edgeIter, ss->edges);
+    for (int i = 0; i < ss->numEdges; i++) {
+        edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
+        for (int x = 0; x < 3; x++)
+           edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
         BLI_ghashIterator_step(ss->faceIter);
     }
 
@@ -293,20 +298,20 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		    Vec3Zero(vert->sl_coords);
             temp = vert->faces;
 
-            // Original coordinate, weight ???
-			Vec3AddMult(vert->coords, edge->sl_coords, 4);
+            // Original coordinate, weight 4 (is this correct?)
+			Vec3AddMult(vert->sl_coords, vert->coords, 4);
 
             // Weights for edges are multiple of shared faces;
             temp = vert->edges;
-			for (i = 0; i < vert->numEdges; i++) {
+			for (int j = 0; j < vert->numEdges; j++) {
 				edge = (SLEdge*)temp->link;
                 edgeMult = edge->numFaces == 0 ? 1 : edge->numFaces;
-				Vec3AddMult(vert->sl_coords, edge->sl_coords, edgeMult);
+				Vec3AddMult(vert->sl_coords, edge->centroid, edgeMult);
                 numEdges += edgeMult;
                 temp = temp->next;
 			}
 
-			for (i = 0; i < vert->numFaces; i++) {
+			for (int j = 0; j < vert->numFaces; j++) {
 				face = (SLFace*)temp->link;
                 if (face->numVerts > 3) {
     				Vec3Add(vert->sl_coords, face->centroid);
@@ -318,8 +323,6 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 			Vec3Mult(vert->sl_coords, 1.0f / ( 4 + numQuads + numEdges) );
 		}
 
-
-        // TODO: Actually do the smoothing part...
         for (int x = 0; x < 3; x++) 
             vert->sl_coords[x] = vert->coords[x];
         BLI_ghashIterator_step(ss->vertIter);
@@ -335,14 +338,52 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
             for (int x = 0; x < 3; x++)
                 edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
 		} else { // Otherwise smooth
+            int avgCount;
+            // Now, this is a bit tricky to deal with ngons. Quads and tris only would be a lot simpler.
+            // Problem is to take into account edges appropriately.
 
-            // TODO: Change this to Catmull-Clark to the proposed smoothing scheme by Stam-Loop
 			Vec3Copy(edge->sl_coords, edge->v0->coords);
 			Vec3Add(edge->sl_coords, edge->v1->coords);
+            Vec3Mult(edge->sl_coords, 2);
+            avgCount = 4;
+
             temp = edge->faces;
 			for (int j = 0; j < edge->numFaces; j++) {
-				SLFace *f = (SLFace*)temp->link;
-				Vec3Add(edge->sl_coords, f->centroid);
+				face = (SLFace*)temp->link;
+                if (face->numVerts == 3) {
+                    // Triangles are split differently from the rest;
+                    // There are connections to the center nodes of the two opposite edges
+                    LinkNode *tempEdgeIt = face->edges;
+                    for (int k = 0; k < 3; k++) {
+                        SLEdge *tempEdge = (SLEdge*)tempEdgeIt->link;
+                        if ( tempEdge != edge ) { // Then opposite edge
+        				    Vec3AddMult(edge->sl_coords, tempEdge->centroid, 2);
+                        }
+                        tempEdgeIt = tempEdgeIt->next;
+                    }
+                    avgCount += 4; // 2 edges each
+                } else {
+                    // Otherwise all ngons are split into quads, leaving one center node and edges
+        			Vec3AddMult(edge->sl_coords, face->centroid, 2);
+                    avgCount += 2;
+                    // Now find the other edges that share a node;
+                    LinkNode *tempEdgeIt = face->edges;
+                    for (int k = 0; k < face->numVerts; k++) {
+                        SLEdge *tempEdge = (SLEdge*)tempEdgeIt->link;
+                        if ( tempEdge != edge ) {
+                            // Check for a shared node;
+                            if ( tempEdge->v0 == edge->v0 || 
+                                 tempEdge->v0 == edge->v1 ||
+                                 tempEdge->v1 == edge->v0 ||
+                                 tempEdge->v1 == edge->v1) {
+            				    Vec3Add(edge->sl_coords, tempEdge->centroid);
+                            }
+                        }
+                        tempEdgeIt = tempEdgeIt->next;
+                    }
+                    avgCount += 4; // 1x2 from centroid + 2x1 from edges
+                }
+				Vec3AddMult(edge->sl_coords, face->centroid, 2);
                 temp = temp->next;
 			}
 			Vec3Mult(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));

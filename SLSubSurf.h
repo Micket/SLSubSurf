@@ -54,7 +54,9 @@ struct SLEdge {
 
     float crease;
 
-    // Center node position
+    float centroid[3];
+
+    // Smoothing center node position
     float sl_coords[3];
 };
 
