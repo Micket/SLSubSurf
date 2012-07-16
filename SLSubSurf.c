@@ -201,6 +201,24 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs
 }
 
 /////////////////////////////////////////////////////////////
+
+inline void Vec3Zero(float a[3]) {
+    for (int x = 0; x < 3; x++) a[x] = 0.0;
+}
+
+inline void Vec3Mult(float a[3], float b) {
+    for (int x = 0; x < 3; x++) a[x] *= b;
+}
+
+inline void Vec3Add(float a[3], float b[3]) {
+    for (int x = 0; x < 3; x++) a[x] += b[x];
+}
+
+inline void Vec3Copy(float a[3], float b[3]) {
+    for (int x = 0; x < 3; x++) a[x] = b[x];
+}
+
+/////////////////////////////////////////////////////////////
 // Actual smoothing stuff
 
 void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
@@ -226,7 +244,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
         BLI_ghashIterator_step(ss->faceIter);
     }
 
-    // Loop over vertices
+    // Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
     BLI_ghashIterator_init(ss->vertIter, ss->verts);
     for (int i = 0; i < ss->numEdges; i++) {
         vert = (SLVert*)BLI_ghashIterator_getValue(ss->vertIter);
@@ -236,36 +254,46 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
         BLI_ghashIterator_step(ss->vertIter);
     }
 
-    // Loop over edges;
+    // Loop over edges and smooth
     BLI_ghashIterator_init(ss->edgeIter, ss->edges);
     for (int i = 0; i < ss->numEdges; i++) {
         edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
         // Loop and create the interpolated coordinates
-        // TODO: Actually do the smoothing part...
-        for (int x = 0; x < 3; x++)
-            edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
+
+		if ( edge->numFaces < 2 || edge->crease >= 1.0f ) { // If its an edge, or maximum crease, then just average.
+            for (int x = 0; x < 3; x++)
+                edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
+		} else { // Otherwise smooth
+
+            // TODO: Change this to Catmull-Clark to the proposed smoothing scheme by Stam-Loop
+			Vec3Copy(edge->sl_coords, edge->v0->coords);
+			Vec3Add(edge->sl_coords, edge->v1->coords);
+            temp = edge->faces;
+			for (int j = 0; j < edge->numFaces; j++) {
+				SLFace *f = (SLFace*)temp->link;
+				Vec3Add(edge->sl_coords, f->centroid);
+                temp = temp->next;
+			}
+			Vec3Mult(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));
+
+            // And take into account crease
+            if ( edge->crease > 0.0f ) {
+                for (int x = 0; x < 3; x++) {
+                    edge->sl_coords[x] = edge->sl_coords[x] + edge->crease * 
+                        ((edge->v0->coords[x] + edge->v1->coords[x])*0.5 - edge->sl_coords[x]);
+                }
+            }
+		}
 
         BLI_ghashIterator_step(ss->edgeIter);
     }
 
-    BLI_ghashIterator_init(ss->faceIter, ss->faces);
+    // Loop over faces and smooth
+    /*BLI_ghashIterator_init(ss->faceIter, ss->faces);
     for (int i = 0; i < ss->numFaces; i++) {
         face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
-        SLVert *v0, *v1, *v2;
-        temp = face->verts;
-        v0 = (SLVert*)temp->link;
-        temp = temp->next;
-        v1 = (SLVert*)temp->link;
-        temp = temp->next;
-        v2 = (SLVert*)temp->link;
-        // Loop and create the interpolated coordinates
-        // TODO: Deal with more than just triangles...
-        // TODO: Actually do the smoothing part...
-        for (int x = 0; x < 3; x++)
-            face->sl_centroid[x] = face->centroid[x];
-
         BLI_ghashIterator_step(ss->faceIter);
-    }
+    }*/
 }
 
 /////////////////////////////////////////////////////////////

@@ -67,7 +67,6 @@ struct SLFace {
     unsigned short requiresUpdate;
 
     float centroid[3];
-    float sl_centroid[3]; // Unused for triangles;
 };
 
 struct SLSubSurf {
