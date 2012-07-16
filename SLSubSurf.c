@@ -149,6 +149,7 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
     vert->numFaces = 0;
     vert->numEdges = 0;
     vert->requiresUpdate = 1;
+    vert->seam = 1;
     
     // Add to hashmap
     BLI_ghash_insert(ss->verts, hashkey, vert);
@@ -214,6 +215,10 @@ inline void Vec3Add(float a[3], float b[3]) {
     for (int x = 0; x < 3; x++) a[x] += b[x];
 }
 
+inline void Vec3AddMult(float a[3], float b[3], float mult) {
+    for (int x = 0; x < 3; x++) a[x] += mult*b[x];
+}
+
 inline void Vec3Copy(float a[3], float b[3]) {
     for (int x = 0; x < 3; x++) a[x] = b[x];
 }
@@ -227,6 +232,9 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     SLVert *vert;
     LinkNode *temp;
     float weight;
+    float avgCrease;
+    int seamCount, creaseCount;
+    int seam;
 
     // Compute centroid, used for smoothing and other things;
     BLI_ghashIterator_init(ss->faceIter, ss->faces);
@@ -248,6 +256,69 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
     BLI_ghashIterator_init(ss->vertIter, ss->verts);
     for (int i = 0; i < ss->numEdges; i++) {
         vert = (SLVert*)BLI_ghashIterator_getValue(ss->vertIter);
+        // Compute average crease and seam;
+        seamCount = 0;
+        creaseCount = 0;
+        avgCrease = 0.0f;
+        seam = vert->seam;
+        temp = vert->edges;
+		for (int j = 0; j < vert->numEdges; j++) {
+			edge = (SLEdge*)temp->link;
+
+			if (seam && edge->numFaces < 2)
+				seamCount++;
+
+			if (edge->crease != 0.0f) {
+				creaseCount++;
+				avgCrease += edge->crease;
+			}
+            temp = temp->next;
+		}
+
+		if (creaseCount) {
+			avgCrease /= creaseCount;
+			if ( avgCrease > 1.0f ) {
+				avgCrease = 1.0f;
+			}
+		}
+
+		if (seamCount < 2 || seamCount != vert->numEdges)
+			seam = 0;
+
+
+        // Now do the smoothing;
+		{
+			int numQuads = 0, numEdges = 0, edgeMult;
+
+		    Vec3Zero(vert->sl_coords);
+            temp = vert->faces;
+
+            // Original coordinate, weight ???
+			Vec3AddMult(vert->coords, edge->sl_coords, 4);
+
+            // Weights for edges are multiple of shared faces;
+            temp = vert->edges;
+			for (i = 0; i < vert->numEdges; i++) {
+				edge = (SLEdge*)temp->link;
+                edgeMult = edge->numFaces == 0 ? 1 : edge->numFaces;
+				Vec3AddMult(vert->sl_coords, edge->sl_coords, edgeMult);
+                numEdges += edgeMult;
+                temp = temp->next;
+			}
+
+			for (i = 0; i < vert->numFaces; i++) {
+				face = (SLFace*)temp->link;
+                if (face->numVerts > 3) {
+    				Vec3Add(vert->sl_coords, face->centroid);
+		    		numQuads++; // Note that the subdivided area is a quad for any ngon > 3
+                }
+                temp = temp->next;
+			}
+
+			Vec3Mult(vert->sl_coords, 1.0f / ( 4 + numQuads + numEdges) );
+		}
+
+
         // TODO: Actually do the smoothing part...
         for (int x = 0; x < 3; x++) 
             vert->sl_coords[x] = vert->coords[x];
@@ -260,7 +331,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
         edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
         // Loop and create the interpolated coordinates
 
-		if ( edge->numFaces < 2 || edge->crease >= 1.0f ) { // If its an edge, or maximum crease, then just average.
+		if (edge->numFaces < 2 || edge->crease >= 1.0f) { // If its an edge, or maximum crease, then just average.
             for (int x = 0; x < 3; x++)
                 edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
 		} else { // Otherwise smooth
@@ -277,7 +348,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 			Vec3Mult(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));
 
             // And take into account crease
-            if ( edge->crease > 0.0f ) {
+            if (edge->crease > 0.0f ) {
                 for (int x = 0; x < 3; x++) {
                     edge->sl_coords[x] = edge->sl_coords[x] + edge->crease * 
                         ((edge->v0->coords[x] + edge->v1->coords[x])*0.5 - edge->sl_coords[x]);

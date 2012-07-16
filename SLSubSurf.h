@@ -37,7 +37,7 @@ struct SLVert {
     LinkNode *faces;
     unsigned short numEdges, numFaces;
 
-    unsigned short requiresUpdate;
+    unsigned short requiresUpdate, seam;
     float crease; // Support node creases as well (why not?)
 
     // Smoothed position;
