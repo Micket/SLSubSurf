@@ -70,6 +70,28 @@ int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
 
 /////////////////////////////////////////////////////////////
 
+inline void Vec3Zero(float a[3]) {
+    for (int x = 0; x < 3; x++) a[x] = 0.0;
+}
+
+inline void Vec3Mult(float a[3], float b) {
+    for (int x = 0; x < 3; x++) a[x] *= b;
+}
+
+inline void Vec3Add(float a[3], float b[3]) {
+    for (int x = 0; x < 3; x++) a[x] += b[x];
+}
+
+inline void Vec3AddMult(float a[3], float b[3], float mult) {
+    for (int x = 0; x < 3; x++) a[x] += mult*b[x];
+}
+
+inline void Vec3Copy(float a[3], float b[3]) {
+    for (int x = 0; x < 3; x++) a[x] = b[x];
+}
+
+/////////////////////////////////////////////////////////////
+
 void _nofreefp(void *x) {
     // Nothing to free, its just the pointer, or freed elsewhere
 }
@@ -203,9 +225,7 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
     // Naive code for now, should use a hashmap of some sort.
     SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
-    vert->coords[0] = coords[0];
-    vert->coords[1] = coords[1];
-    vert->coords[2] = coords[2];
+    Vec3Copy(vert->coords, coords);
     vert->numFaces = 0;
     vert->numEdges = 0;
     vert->requiresUpdate = 1;
@@ -259,28 +279,6 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs
     
     // Add to hashmap
     BLI_ghash_insert(ss->faces, hashkey, face);
-}
-
-/////////////////////////////////////////////////////////////
-
-inline void Vec3Zero(float a[3]) {
-    for (int x = 0; x < 3; x++) a[x] = 0.0;
-}
-
-inline void Vec3Mult(float a[3], float b) {
-    for (int x = 0; x < 3; x++) a[x] *= b;
-}
-
-inline void Vec3Add(float a[3], float b[3]) {
-    for (int x = 0; x < 3; x++) a[x] += b[x];
-}
-
-inline void Vec3AddMult(float a[3], float b[3], float mult) {
-    for (int x = 0; x < 3; x++) a[x] += mult*b[x];
-}
-
-inline void Vec3Copy(float a[3], float b[3]) {
-    for (int x = 0; x < 3; x++) a[x] = b[x];
 }
 
 /////////////////////////////////////////////////////////////
