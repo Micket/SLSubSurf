@@ -70,13 +70,26 @@ int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
 
 /////////////////////////////////////////////////////////////
 
-void _keyfreefp(void *key) {
-    // Nothing to free, its just the pointer.
+void _nofreefp(void *x) {
+    // Nothing to free, its just the pointer, or freed elsewhere
 }
 
-void _valfreefp(void *val) {
-    // Allocated by the memarena, will be freed by it.
+// These free the memory allocated the the linknode itself, not the link, which is allocated/freed by the memory arena
+static void _valfreeVert(void *val) {
+    SLVert *vert = (SLVert*)val;
+    BLI_linklist_free(vert->edges, NULL);
+    BLI_linklist_free(vert->faces, NULL);
 }
+static void _valfreeEdge(void *val) {
+    SLEdge *edge = (SLEdge*)val;
+    BLI_linklist_free(edge->faces, NULL);
+}
+static void _valfreeFace(void *val) {
+    SLFace *face = (SLFace*)val;
+    BLI_linklist_free(face->verts, NULL);
+    BLI_linklist_free(face->edges, NULL);
+}
+ 
 
 SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
     SLSubSurf *ss = (SLSubSurf*)BLI_memarena_alloc(ma, sizeof(SLSubSurf));
@@ -84,9 +97,9 @@ SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
     ss->edges = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL edges");
     ss->faces = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL faces");
 
-    vertIter = BLI_ghashIterator_new(ss->verts);
-    edgeIter = BLI_ghashIterator_new(ss->edges);
-    faceIter = BLI_ghashIterator_new(ss->faces);
+    ss->vertIter = BLI_ghashIterator_new(ss->verts);
+    ss->edgeIter = BLI_ghashIterator_new(ss->edges);
+    ss->faceIter = BLI_ghashIterator_new(ss->faces);
 
     ss->numVerts = ss->numEdges = ss->numFaces = 0;
     ss->memArena = ma;
@@ -94,15 +107,15 @@ SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
 
     return ss;
 }
- 
-void SL_SubSurf_free(SLSubSurf *ss) {
-    BLI_ghashIterator_free(vertIter);
-    BLI_ghashIterator_free(edgeIter);
-    BLI_ghashIterator_free(faceIter);
 
-    BLI_ghash_free(ss->verts, _keyfreefp, _valfreefp);
-    BLI_ghash_free(ss->edges, _keyfreefp, _valfreefp);
-    BLI_ghash_free(ss->faces, _keyfreefp, _valfreefp);
+void SL_SubSurf_free(SLSubSurf *ss) {
+    BLI_ghashIterator_free(ss->vertIter);
+    BLI_ghashIterator_free(ss->edgeIter);
+    BLI_ghashIterator_free(ss->faceIter);
+
+    BLI_ghash_free(ss->verts, _nofreefp, _valfreeVert);
+    BLI_ghash_free(ss->edges, _nofreefp, _valfreeEdge);
+    BLI_ghash_free(ss->faces, _nofreefp, _valfreeFace);
     // Frees everything allocated by the mem arena;
     BLI_memarena_free(ss->memArena);
     free(ss);
@@ -386,7 +399,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
         edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
         if (!edge->requiresUpdate) continue;
 
-        // Create the smoothed coordinate
+        // Create the interpolated coordinates
 		if (edge->numFaces < 2 || edge->crease >= 1.0f) { // If its an edge, or maximum crease, then just average.
             for (int x = 0; x < 3; x++)
                 edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
