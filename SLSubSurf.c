@@ -84,6 +84,10 @@ SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
     ss->edges = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL edges");
     ss->faces = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL faces");
 
+    vertIter = BLI_ghashIterator_new(ss->verts);
+    edgeIter = BLI_ghashIterator_new(ss->edges);
+    faceIter = BLI_ghashIterator_new(ss->faces);
+
     ss->numVerts = ss->numEdges = ss->numFaces = 0;
     ss->memArena = ma;
     ss->smoothing = smoothing;
@@ -92,7 +96,10 @@ SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
 }
  
 void SL_SubSurf_free(SLSubSurf *ss) {
-    //TODO what about the free'ing functions?
+    BLI_ghashIterator_free(vertIter);
+    BLI_ghashIterator_free(edgeIter);
+    BLI_ghashIterator_free(faceIter);
+
     BLI_ghash_free(ss->verts, _keyfreefp, _valfreefp);
     BLI_ghash_free(ss->edges, _keyfreefp, _valfreefp);
     BLI_ghash_free(ss->faces, _keyfreefp, _valfreefp);
@@ -278,8 +285,10 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 
     // Compute centroid, used for smoothing and other things;
     BLI_ghashIterator_init(ss->faceIter, ss->faces);
-    for (int i = 0; i < ss->numFaces; i++) {
+    for (; !BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter))  {
         face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
+        if (face->requiresUpdate) continue;
+
         Vec3Zero(face->centroid);
         for (int j = 0; j < face->numVerts; j++) {
             temp = face->verts;
@@ -287,21 +296,23 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
             temp = temp->next;
         }
         Vec3Mult(face->centroid, 1.0f / face->numVerts );
-        BLI_ghashIterator_step(ss->faceIter);
     }
     // also for edges;
     BLI_ghashIterator_init(ss->edgeIter, ss->edges);
-    for (int i = 0; i < ss->numEdges; i++) {
+    for (; !BLI_ghashIterator_isDone(ss->edgeIter); BLI_ghashIterator_step(ss->edgeIter))  {
         edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
+        if (!edge->requiresUpdate) continue;
+
         for (int x = 0; x < 3; x++)
            edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
-        BLI_ghashIterator_step(ss->faceIter);
     }
 
     // Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
     BLI_ghashIterator_init(ss->vertIter, ss->verts);
-    for (int i = 0; i < ss->numEdges; i++) {
+    for (; !BLI_ghashIterator_isDone(ss->vertIter); BLI_ghashIterator_step(ss->vertIter))  {
         vert = (SLVert*)BLI_ghashIterator_getValue(ss->vertIter);
+        if (!vert->requiresUpdate) continue;
+
         // Compute average crease and seam;
         seamCount = 0;
         creaseCount = 0;
@@ -371,10 +382,11 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 
     // Loop over edges and smooth
     BLI_ghashIterator_init(ss->edgeIter, ss->edges);
-    for (int i = 0; i < ss->numEdges; i++) {
+    for (; !BLI_ghashIterator_isDone(ss->edgeIter); BLI_ghashIterator_step(ss->edgeIter))  {
         edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
-        // Loop and create the interpolated coordinates
+        if (!edge->requiresUpdate) continue;
 
+        // Create the smoothed coordinate
 		if (edge->numFaces < 2 || edge->crease >= 1.0f) { // If its an edge, or maximum crease, then just average.
             for (int x = 0; x < 3; x++)
                 edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
