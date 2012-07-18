@@ -113,7 +113,8 @@ static void _valfreeFace(void *val) {
 }
  
 
-SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
+SLSubSurf* SL_SubSurf_new(int smoothing) {
+    MemArena *ma = BLI_memarena_new((1<<16), "SL subsurf");
     SLSubSurf *ss = (SLSubSurf*)BLI_memarena_alloc(ma, sizeof(SLSubSurf));
     ss->verts = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL verts");
     ss->edges = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL edges");

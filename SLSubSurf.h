@@ -94,7 +94,7 @@ int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss);
 
 
-SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma); 
+SLSubSurf* SL_SubSurf_new(int smoothing); 
 void SL_SubSurf_free(SLSubSurf *ss);
 
 
