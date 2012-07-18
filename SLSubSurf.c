@@ -75,8 +75,7 @@ void _keyfreefp(void *key) {
 }
 
 void _valfreefp(void *val) {
-    // Nothing to free, its just the pointer.
-    
+    // Allocated by the memarena, will be freed by it.
 }
 
 SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
@@ -94,9 +93,9 @@ SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
  
 void SL_SubSurf_free(SLSubSurf *ss) {
     //TODO what about the free'ing functions?
-    //BLI_ghash_free(ss->verts, _keyfreefp, _valfreefp);
-    //BLI_ghash_free(ss->edges, _keyfreefp, _valfreefp);
-    //BLI_ghash_free(ss->faces, _keyfreefp, _valfreefp);
+    BLI_ghash_free(ss->verts, _keyfreefp, _valfreefp);
+    BLI_ghash_free(ss->edges, _keyfreefp, _valfreefp);
+    BLI_ghash_free(ss->faces, _keyfreefp, _valfreefp);
     // Frees everything allocated by the mem arena;
     BLI_memarena_free(ss->memArena);
     free(ss);
