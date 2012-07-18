@@ -116,9 +116,8 @@ void SL_SubSurf_free(SLSubSurf *ss) {
     BLI_ghash_free(ss->verts, _nofreefp, _valfreeVert);
     BLI_ghash_free(ss->edges, _nofreefp, _valfreeEdge);
     BLI_ghash_free(ss->faces, _nofreefp, _valfreeFace);
-    // Frees everything allocated by the mem arena;
+
     BLI_memarena_free(ss->memArena);
-    free(ss);
 }
 
 /////////////////////////////////////////////////////////////
