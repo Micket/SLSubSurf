@@ -16,6 +16,8 @@
 
 #include "SLSubSurf.h"
 #include "stdlib.h"
+//#include "MEM_guardedalloc.h"
+void MEM_freeN(void *ptr);
 
 /////////////////////////////////////////////////////////////
 // Support functions for faces;
@@ -68,54 +70,94 @@ int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
 
 /////////////////////////////////////////////////////////////
 
-SLSubSurf* SL_SubSurf_new(int smoothing) {
-    SLSubSurf *ss = (SLSubSurf*)malloc(sizeof(SLSubSurf));
+void _keyfreefp(void *key) {
+    // Nothing to free, its just the pointer.
+}
+
+void _valfreefp(void *val) {
+    // Nothing to free, its just the pointer.
+    
+}
+
+SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma) {
+    SLSubSurf *ss = (SLSubSurf*)BLI_memarena_alloc(ma, sizeof(SLSubSurf));
+    ss->verts = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL verts");
+    ss->edges = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL edges");
+    ss->faces = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL faces");
+
+    ss->numVerts = ss->numEdges = ss->numFaces = 0;
+    ss->memArena = ma;
     ss->smoothing = smoothing;
+
     return ss;
 }
  
 void SL_SubSurf_free(SLSubSurf *ss) {
-    //TODO
+    //TODO what about the free'ing functions?
+    //BLI_ghash_free(ss->verts, _keyfreefp, _valfreefp);
+    //BLI_ghash_free(ss->edges, _keyfreefp, _valfreefp);
+    //BLI_ghash_free(ss->faces, _keyfreefp, _valfreefp);
+    // Frees everything allocated by the mem arena;
+    BLI_memarena_free(ss->memArena);
+    free(ss);
 }
 
 /////////////////////////////////////////////////////////////
 // Helpers for connecting & disconnecting edges-verts-faces
 // Using linked lists here;
 
-static void _vertAddFace(SLVert *v, SLFace *f, SLSubSurf *ss)
-{
+// Missing from BLI_linklist;
+void BLI_linklist_remove(LinkNode **list, void *item) {
+    if ((*list)->link == item) { // First entry should be removed
+        // Called should free the item, we'll just stop the node;
+        LinkNode *tmp = (*list)->next;
+        MEM_freeN(*list);
+        *list = tmp;
+        return;
+    }
+
+    LinkNode *prev = *list;
+    LinkNode *node = prev->next;
+    while (node != NULL) {
+        if (node->link == item) {
+            prev->next = node->next; // Connect the previous node
+            MEM_freeN(*list);
+        }
+        prev = node;
+        node = node->next;
+    }
+}
+
+
+static void _vertAddFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
     BLI_linklist_prepend(&v->faces, f); // Am I using it correctly?!
     v->numFaces++;
 }
-static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss)
-{
-    //BLI_linklist_remove(&v->faces, f);
+static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
+    BLI_linklist_remove(&v->faces, f);
     v->numFaces--;
 }
 
 ///// 
 
-static void _vertAddEdge(SLVert *v, SLEdge *e, SLSubSurf *ss)
-{
+static void _vertAddEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
     BLI_linklist_prepend(&v->edges, e);
     v->numEdges++;
 }
-static void _vertRemoteEdge(SLVert *v, SLEdge *e, SLSubSurf *ss)
-{
-    //BLI_linklist_remove(&v->edges, e);
+
+static void _vertRemoteEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
+    BLI_linklist_remove(&v->edges, e);
     v->numEdges--;
 }
 
 ///// 
 
-static void _edgeAddFace(SLEdge *e, SLFace *f, SLSubSurf *ss)
-{
+static void _edgeAddFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
     BLI_linklist_prepend(&e->faces, f);
     e->numFaces++;
 }
-static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss)
-{
-    //BLI_linklist_remove(&e->faces, f);
+static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
+    BLI_linklist_remove(&e->faces, f);
     e->numFaces--;
 }
 
@@ -142,7 +184,7 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 
 void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
     // Naive code for now, should use a hashmap of some sort.
-    SLVert *vert = malloc(sizeof(SLVert));
+    SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
     vert->coords[0] = coords[0];
     vert->coords[1] = coords[1];
     vert->coords[2] = coords[2];
@@ -157,7 +199,7 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 
 void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, SLVert *v0, SLVert *v1, float crease) {
     // Naive code for now, should use a hashmap of some sort.
-    SLEdge *edge = malloc(sizeof(SLEdge));
+    SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
 
     edge->v0 = v0;
     edge->v1 = v1;
@@ -176,7 +218,7 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs
 
     // New face? Then;
     SLEdge *edge;
-    SLFace *face = malloc(sizeof(SLFace));
+    SLFace *face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
 
     // Static lists for faces maybe?
     //face->verts = (SLVert**)malloc(sizeof(SLVert*)*numVerts);

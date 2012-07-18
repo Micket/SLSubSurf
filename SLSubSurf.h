@@ -16,6 +16,7 @@
 
 #include "BLI_linklist.h"
 #include "BLI_ghash.h"
+#include "BLI_memarena.h"
 
 typedef struct SLSubSurf SLSubSurf;
 typedef struct SLFace SLFace;
@@ -72,6 +73,8 @@ struct SLFace {
 };
 
 struct SLSubSurf {
+    MemArena *memArena;
+
     int smoothing; // Boolean, nonzero for smoothing.
 
  	GHash *verts, *edges, *faces;
@@ -91,7 +94,7 @@ int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss);
 
 
-SLSubSurf* SL_SubSurf_new(int smoothing); // Allocators here? 
+SLSubSurf* SL_SubSurf_new(int smoothing, MemArena *ma); 
 void SL_SubSurf_free(SLSubSurf *ss);
 
 
