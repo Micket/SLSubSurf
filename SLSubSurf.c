@@ -19,6 +19,11 @@
 //#include "MEM_guardedalloc.h"
 void MEM_freeN(void *ptr);
 
+// Convenient macro for looping through linked lists (which is done a lot)
+#define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
+// and the same for hashmaps
+#define FOR_HASH(it, list) for (BLI_ghashIterator_init(it,list); !BLI_ghashIterator_isDone(it); BLI_ghashIterator_step(it))
+
 /////////////////////////////////////////////////////////////
 // Support functions for faces;
 
@@ -43,18 +48,16 @@ int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss) {
 	// Simple things first, corners and interpolated edge verts;
 	int totNodes = ss->numVerts + ss->numEdges; // One new node per edge
 	// Then faces, which varies;
-	BLI_ghashIterator_init(ss->faceIter, ss->faces);
-	for (; BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter)) {
-		totNodes += SL_giveNumberOfInternalNodes((SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
+	FOR_HASH(ss->it, ss->faces) {
+		totNodes += SL_giveNumberOfInternalNodes((SLFace*)BLI_ghashIterator_getValue(ss->it));
 	}
 	return totNodes;
 }
 
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss) {
 	int totEdges = ss->numEdges * 2;
-	BLI_ghashIterator_init(ss->faceIter, ss->faces);
-	for (; !BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter)) {
-		totEdges += ((SLFace*)BLI_ghashIterator_getValue(ss->faceIter))->numVerts; // (Holds for both triangles and ngons)
+	FOR_HASH(ss->it, ss->faces) {
+		totEdges += ((SLFace*)BLI_ghashIterator_getValue(ss->it))->numVerts; // (Holds for both triangles and ngons)
 	}
 	return totEdges;
 }
@@ -63,9 +66,8 @@ int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
 	// Since we know that all subdivided elements have the same number of sub-faces;
 	int totFaces = 0; // One new node per edge
 	// Then faces, which varies;
-	BLI_ghashIterator_init(ss->faceIter, ss->faces);
-	for (; !BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter)) {
-		totFaces += SL_giveNumberOfInternalFaces((SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
+	FOR_HASH(ss->it, ss->faces) {
+		totFaces += SL_giveNumberOfInternalFaces((SLFace*)BLI_ghashIterator_getValue(ss->it));
 	}
 	return totFaces;
 }
@@ -97,9 +99,6 @@ inline void Vec3Copy(float a[3], float b[3]) {
 	for (x = 0; x < 3; x++) a[x] = b[x];
 }
 
-// Convenient macro for looping through linked lists (which is done a lot)
-#define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
-
 /////////////////////////////////////////////////////////////
 
 void _nofreefp(void *x) {
@@ -130,9 +129,7 @@ SLSubSurf* SL_SubSurf_new(int smoothing) {
 	ss->edges = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL edges");
 	ss->faces = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL faces");
 
-	ss->vertIter = BLI_ghashIterator_new(ss->verts);
-	ss->edgeIter = BLI_ghashIterator_new(ss->edges);
-	ss->faceIter = BLI_ghashIterator_new(ss->faces);
+	ss->it = BLI_ghashIterator_new(ss->verts); // Note: Can be used for every hash anyway (after init)
 
 	ss->numVerts = ss->numEdges = ss->numFaces = 0;
 	ss->memArena = ma;
@@ -142,9 +139,7 @@ SLSubSurf* SL_SubSurf_new(int smoothing) {
 }
 
 void SL_SubSurf_free(SLSubSurf *ss) {
-	BLI_ghashIterator_free(ss->vertIter);
-	BLI_ghashIterator_free(ss->edgeIter);
-	BLI_ghashIterator_free(ss->faceIter);
+	BLI_ghashIterator_free(ss->it);
 
 	BLI_ghash_free(ss->verts, _nofreefp, _valfreeVert);
 	BLI_ghash_free(ss->edges, _nofreefp, _valfreeEdge);
@@ -388,9 +383,8 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 	int seam;
 
 	// Compute centroid, used for smoothing and other things;
-	BLI_ghashIterator_init(ss->faceIter, ss->faces);
-	for (; !BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter))  {
-		face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
+	FOR_HASH(ss->it, ss->faces) {
+		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
 		if (face->requiresUpdate) continue;
 
 		Vec3Zero(face->centroid);
@@ -401,10 +395,9 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		Vec3Mult(face->centroid, 1.0f / face->numVerts );
 	}
 	// also for edges;
-	BLI_ghashIterator_init(ss->edgeIter, ss->edges);
-	for (; !BLI_ghashIterator_isDone(ss->edgeIter); BLI_ghashIterator_step(ss->edgeIter))  {
+	FOR_HASH(ss->it, ss->edges) {
 		int x;
-		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
+		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
 		if (!edge->requiresUpdate) continue;
 
 		for (x = 0; x < 3; x++)
@@ -412,9 +405,8 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 	}
 
 	// Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
-	BLI_ghashIterator_init(ss->vertIter, ss->verts);
-	for (; !BLI_ghashIterator_isDone(ss->vertIter); BLI_ghashIterator_step(ss->vertIter))  {
-		vert = (SLVert*)BLI_ghashIterator_getValue(ss->vertIter);
+	FOR_HASH(ss->it, ss->verts) {
+		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		if (!vert->requiresUpdate) continue;
 
 		// Compute average crease and seam;
@@ -475,13 +467,11 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		}
 		// TODO: Crease it?
 		//for (int x = 0; x < 3; x++) vert->sl_coords[x] = (1.0f - crease)*vert->sl_coords[x] + crease*vert->coords[x];
-		BLI_ghashIterator_step(ss->vertIter);
 	}
 
 	// Loop over edges and smooth
-	BLI_ghashIterator_init(ss->edgeIter, ss->edges);
-	for (; !BLI_ghashIterator_isDone(ss->edgeIter); BLI_ghashIterator_step(ss->edgeIter))  {
-		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->edgeIter);
+	FOR_HASH(ss->it, ss->edges) {
+		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
 		if (!edge->requiresUpdate) continue;
 
 		// Create the interpolated coordinates
@@ -547,10 +537,10 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 	}
 
 	// Loop over faces and smooth
-	/*BLI_ghashIterator_init(ss->faceIter, ss->faces);
-	  for (; !BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter))  {
-	  face = (SLFace*)BLI_ghashIterator_getValue(ss->faceIter);
-	  }*/
+	/*
+	FOR_HASH(ss->it, ss->faces) {
+		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+	}*/
 }
 
 /////////////////////////////////////////////////////////////

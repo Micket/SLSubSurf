@@ -78,7 +78,7 @@ struct SLSubSurf {
     int smoothing; // Boolean, nonzero for smoothing.
 
  	GHash *verts, *edges, *faces;
- 	GHashIterator *vertIter, *edgeIter, *faceIter;
+ 	GHashIterator *it;
 
     int numVerts;
     int numEdges;
