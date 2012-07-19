@@ -65,7 +65,6 @@ int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
 	// Then faces, which varies;
 	BLI_ghashIterator_init(ss->faceIter, ss->faces);
 	for (; !BLI_ghashIterator_isDone(ss->faceIter); BLI_ghashIterator_step(ss->faceIter)) {
-		
 		totFaces += SL_giveNumberOfInternalFaces((SLFace*)BLI_ghashIterator_getValue(ss->faceIter));
 	}
 	return totFaces;
@@ -224,8 +223,8 @@ static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
 
 static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 	LinkNode *edge0, *edge1;
-	for (edge0 = v0->edges; edge0 != NULL; edge0 = edge0->next) {
-		for (edge1 = v1->edges; edge1 != NULL; edge1 = edge1->next) {
+	FOR_LIST(edge0, v0->edges) {
+		FOR_LIST(edge1, v1->edges) {
 			if ( edge0->link == edge1->link) {
 				return (SLEdge*)edge0->link;
 			}
@@ -258,7 +257,7 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 		Vec3Copy(vert->coords, coords);
 		vert->seam = seam;
 		// Connected edges and faces need to updated
-		for (it = vert->faces; it->link != NULL; it = it->next) {
+		FOR_LIST(it, vert->faces) {
 			LinkNode *it2;
 			SLFace *face = (SLFace*)it->link;
 			face->requiresUpdate = 1;
@@ -309,7 +308,7 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 }
 
 // Must be called after syncEdge
-void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs) {
+void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
 	if ( BLI_ghash_lookup(ss->faces, hashkey) != NULL ) { 
 		return; // Nothing can change be updated for existing faces.
 	}
@@ -317,6 +316,7 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs
 	// New face? Then;
 	int i;
 	SLEdge *edge;
+	SLVert *vert, *nextVert;
 	SLFace *face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
 
 	// Static lists for faces maybe?
@@ -328,10 +328,12 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs
 
 	for (i = 0; i < numVerts; i++) {
 		// Verts
-		BLI_linklist_prepend(&face->verts, vs[i]);
-		_vertAddFace(vs[i], face, ss);
+		vert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[i]);
+		BLI_linklist_prepend(&face->verts, vert);
+		_vertAddFace(vert, face, ss);
 		// Then edges
-		edge = _sharedEdge(vs[i], vs[(i+1) % numVerts]);
+		nextVert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[(i+1) % numVerts]);
+		edge = _sharedEdge(vert, nextVert);
 		BLI_linklist_prepend(&face->edges, edge);
 		_edgeAddFace(edge, face, ss);
 	}
