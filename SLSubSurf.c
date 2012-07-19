@@ -408,6 +408,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 	FOR_HASH(ss->it, ss->verts) {
 		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		if (!vert->requiresUpdate) continue;
+		if (!ss->smoothing) Vec3Copy(vert->sl_coords, vert->coords);
 
 		// Compute average sharpness and seam;
 		seamCount = 0;
@@ -510,7 +511,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		if (!edge->requiresUpdate) continue;
 
 		// Create the interpolated coordinates
-		if (edge->numFaces < 2 || edge->sharpness >= 1.0f) { // If its an edge, or maximum sharpness, then just average.
+		if (!ss->smoothing || edge->numFaces < 2 || edge->sharpness >= 1.0f) { // If its an edge, or maximum sharpness, then just average.
 			Vec3Copy(edge->sl_coords, edge->centroid);
 		} else { // Otherwise smooth
 			int avgCount;
