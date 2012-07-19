@@ -98,6 +98,9 @@ inline void Vec3Copy(float a[3], float b[3]) {
 	for (x = 0; x < 3; x++) a[x] = b[x];
 }
 
+// Convenient macro for looping through linked lists (which is done a lot)
+#define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
+
 /////////////////////////////////////////////////////////////
 
 void _nofreefp(void *x) {
@@ -260,10 +263,10 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 			SLFace *face = (SLFace*)it->link;
 			face->requiresUpdate = 1;
 			// Also effects all edges on the connected face (since the center point moves)
-			for (it2 = face->edges; it2->link != NULL; it2 = it2->next) {
+			FOR_LIST(it2, face->edges) {
 				((SLEdge*)it->link)->requiresUpdate = 1;
 			}
-			for (it2 = face->verts; it2->link != NULL; it2 = it2->next) {
+			FOR_LIST(it2, face->verts) {
 				((SLVert*)it->link)->requiresUpdate = 1;
 			}
 		}
@@ -298,7 +301,7 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 		// Affects the directly connected faces and verts
 		edge->v0->requiresUpdate = 1;
 		edge->v1->requiresUpdate = 1;
-		for (it = edge->faces; it->link != NULL; it = it->next) {
+		FOR_LIST(it, edge->faces) {
 			((SLFace*)it->link)->requiresUpdate = 1;
 		}
 	}
@@ -377,7 +380,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 	SLFace *face;
 	SLEdge *edge;
 	SLVert *vert;
-	LinkNode *temp;
+	LinkNode *it;
 	float avgCrease;
 	int seamCount, creaseCount;
 	int seam;
@@ -389,8 +392,9 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		if (face->requiresUpdate) continue;
 
 		Vec3Zero(face->centroid);
-		for (temp = face->verts; temp != NULL; temp = temp->next) {
-			Vec3Add(face->centroid, ((SLVert*)temp->link)->coords);
+
+		FOR_LIST(it, face->verts) {
+			Vec3Add(face->centroid, ((SLVert*)it->link)->coords);
 		}
 		Vec3Mult(face->centroid, 1.0f / face->numVerts );
 	}
@@ -416,8 +420,8 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		creaseCount = 0;
 		avgCrease = 0.0f;
 		seam = vert->seam;
-		for (temp = vert->edges; temp != NULL; temp = temp->next) {
-			edge = (SLEdge*)temp->link;
+		FOR_LIST(it, face->verts) {
+			edge = (SLEdge*)it->link;
 
 			if (seam && edge->numFaces < 2)
 				seamCount++;
@@ -450,15 +454,15 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 			avgCount = 4;
 
 			// Weights for edges are multiple of shared faces;
-			for (temp = vert->edges; temp != NULL; temp = temp->next) {
-				edge = (SLEdge*)temp->link;
+			FOR_LIST(it, vert->edges) {
+				edge = (SLEdge*)it->link;
 				edgeMult = edge->numFaces == 0 ? 1 : edge->numFaces;
 				Vec3AddMult(vert->sl_coords, edge->centroid, edgeMult);
 				avgCount += edgeMult;
 			}
 
-			for (temp = vert->faces; temp != NULL; temp = temp->next) {
-				face = (SLFace*)temp->link;
+			FOR_LIST(it, vert->faces) {
+				face = (SLFace*)it->link;
 				if (face->numVerts > 3) {
 					Vec3Add(vert->sl_coords, face->centroid);
 					avgCount++; // Note that the subdivided area is a quad for any ngon > 3
@@ -493,27 +497,27 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 			Vec3Mult(edge->sl_coords, 2);
 			avgCount = 4;
 
-			for (temp = edge->faces; temp != NULL; temp = temp->next) {
-				face = (SLFace*)temp->link;
+			FOR_LIST(it, edge->faces) {
+				face = (SLFace*)it->link;
 				if (face->numVerts == 3) {
-					LinkNode *tempEdgeIt;
+					LinkNode *it2;
 					// Triangles are split differently from the rest;
 					// There are connections to the center nodes of the two opposite edges
-					for (tempEdgeIt = face->edges; tempEdgeIt != NULL; tempEdgeIt = tempEdgeIt->next) {
-						SLEdge *tempEdge = (SLEdge*)tempEdgeIt->link;
+					FOR_LIST(it2, vert->edges) {
+						SLEdge *tempEdge = (SLEdge*)it2->link;
 						if ( tempEdge != edge ) { // Then opposite edge
 							Vec3AddMult(edge->sl_coords, tempEdge->centroid, 2);
 						}
 					}
 					avgCount += 4; // 2 edges each
 				} else {
-					LinkNode *tempEdgeIt;
+					LinkNode *it2;
 					// Otherwise all ngons are split into quads, leaving one center node and edges
 					Vec3AddMult(edge->sl_coords, face->centroid, 2);
 					avgCount += 2;
 					// Now find the other edges that share a node;
-					for (tempEdgeIt = face->edges; tempEdgeIt != NULL; tempEdgeIt = tempEdgeIt->next) {
-						SLEdge *tempEdge = (SLEdge*)tempEdgeIt->link;
+					FOR_LIST(it2, vert->edges) {
+						SLEdge *tempEdge = (SLEdge*)it2->link;
 						if ( tempEdge != edge ) {
 							// Check for a shared node;
 							if ( tempEdge->v0 == edge->v0 || 
