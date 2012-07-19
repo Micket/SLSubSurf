@@ -171,11 +171,13 @@ void BLI_linklist_remove(LinkNode **list, void *item) {
 
 
 static void _vertAddFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
-    BLI_linklist_prepend(&v->faces, f); // Am I using it correctly?!
+    BLI_linklist_prepend(&v->faces, f);
+    v->requiresUpdate = 1;
     v->numFaces++;
 }
 static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
     BLI_linklist_remove(&v->faces, f);
+    v->requiresUpdate = 1;
     v->numFaces--;
 }
 
@@ -183,11 +185,13 @@ static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
 
 static void _vertAddEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
     BLI_linklist_prepend(&v->edges, e);
+    v->requiresUpdate = 1;
     v->numEdges++;
 }
 
-static void _vertRemoteEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
+static void _vertRemoveEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
     BLI_linklist_remove(&v->edges, e);
+    v->requiresUpdate = 1;
     v->numEdges--;
 }
 
@@ -195,10 +199,12 @@ static void _vertRemoteEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
 
 static void _edgeAddFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
     BLI_linklist_prepend(&e->faces, f);
+    e->requiresUpdate = 1;
     e->numFaces++;
 }
 static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
     BLI_linklist_remove(&e->faces, f);
+    e->requiresUpdate = 1;
     e->numFaces--;
 }
 
@@ -221,49 +227,92 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 }
 
 /////////////////////////////////////////////////////////////
-// Note! Must be added as verts, then edges, then faces. 
+// Note! Must be added as verts, then edges, then faces and removed in the opposite order 
 
 void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
-    // Naive code for now, should use a hashmap of some sort.
-    SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
-    Vec3Copy(vert->coords, coords);
-    vert->numFaces = 0;
-    vert->numEdges = 0;
-    vert->requiresUpdate = 1;
-    vert->seam = 1;
+    SLVert *vert;
+
+    if ( (vert = BLI_ghash_lookup(ss->verts, hashkey)) == NULL ) { // Then new vert
+        SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
+        Vec3Copy(vert->coords, coords);
+        vert->edges = NULL;
+        vert->faces = NULL;
+        vert->numFaces = 0;
+        vert->numEdges = 0;
+        vert->seam = seam;
     
-    // Add to hashmap
-    BLI_ghash_insert(ss->verts, hashkey, vert);
+        // Add to hashmap
+        BLI_ghash_insert(ss->verts, hashkey, vert);
+        ss->numVerts++;
+    } else {
+        // Then existing vert has moved (TODO: Should I split this function?)
+        LinkNode *it;
+        Vec3Copy(vert->coords, coords);
+        vert->seam = seam;
+        // Connected edges and faces need to updated
+        for (it = vert->faces; it->link != NULL; it = it->next) {
+            LinkNode *it2;
+            SLFace *face = (SLFace*)it->link;
+            face->requiresUpdate = 1;
+            // Also effects all edges on the connected face (since the center point moves)
+            for (it2 = face->edges; it2->link != NULL; it2 = it2->next) {
+                ((SLEdge*)it->link)->requiresUpdate = 1;
+            }
+            for (it2 = face->verts; it2->link != NULL; it2 = it2->next) {
+                ((SLVert*)it->link)->requiresUpdate = 1;
+            }
+        }
+
+    }
+    vert->requiresUpdate = 1;
 }
 
-void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, SLVert *v0, SLVert *v1, float crease) {
-    // Naive code for now, should use a hashmap of some sort.
-    SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
+// Must be called after syncVert
+void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float crease) {
+    SLEdge *edge;
 
-    edge->v0 = v0;
-    edge->v1 = v1;
-    edge->crease = crease;
-    edge->requiresUpdate = 1;
+    if ( (edge = BLI_ghash_lookup(ss->edges, hashkey)) == NULL ) {
+        // Then new edge
+        SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
 
-    _vertAddEdge(v0, edge, ss);
-    _vertAddEdge(v1, edge, ss);
+        edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
+        edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
+        edge->faces = NULL;
+        edge->crease = crease;
+        edge->requiresUpdate = 1;
 
-    // Add to hashmap
-    BLI_ghash_insert(ss->edges, hashkey, edge);
+        _vertAddEdge(edge->v0, edge, ss);
+        _vertAddEdge(edge->v1, edge, ss);
+
+        // Add to hashmap
+        BLI_ghash_insert(ss->edges, hashkey, edge);
+    } else {
+        // This means that crease has changed (v0 and v1 aren't allowed to change, that would indicate a *new* edge)
+        LinkNode *it;
+        edge->crease = crease;
+        // Affects the directly connected faces and verts
+        edge->v0->requiresUpdate = 1;
+        edge->v1->requiresUpdate = 1;
+        for (it = edge->faces; it->link != NULL; it = it->next) {
+            ((SLFace*)it->link)->requiresUpdate = 1;
+        }
+    }
+    ss->numEdges++;
 }
 
+// Must be called after syncEdge
 void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs) {
-    // Naive code for now, should use a hashmap of some sort, not just a simple linked list.
+    if ( BLI_ghash_lookup(ss->faces, hashkey) != NULL ) { 
+        return; // Nothing can change be updated for existing faces.
+    }
 
     // New face? Then;
     SLEdge *edge;
     SLFace *face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
 
     // Static lists for faces maybe?
-    //face->verts = (SLVert**)malloc(sizeof(SLVert*)*numVerts);
-    //face->edges = (SLEdge**)malloc(sizeof(SLEdge*)*numVerts);
-    // Allocate memory;
-    //face->edges = (SLEdge**)malloc(sizeof(SLEdge*)*numVerts);
+    //face->verts = (SLVert**)MEM_allocN(sizeof(SLVert*)*numVerts);
+    //face->edges = (SLEdge**)MEM_allocN(sizeof(SLEdge*)*numVerts);
 
     face->numVerts = numVerts;
     face->requiresUpdate = 1;
@@ -280,6 +329,43 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, SLVert **vs
     
     // Add to hashmap
     BLI_ghash_insert(ss->faces, hashkey, face);
+    ss->numFaces++;
+}
+
+// And then deletion
+
+// Must be called after syncEdgeDel
+void SL_SubSurf_syncVertDel(SLSubSurf *ss, void *hashkey) {
+    BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeVert);
+    ss->numVerts--;
+}
+
+// Must be called after syncFaceDel!
+void SL_SubSurf_syncEdgeDel(SLSubSurf *ss, void *hashkey) {
+    // Disconnect edge;
+    SLEdge *edge = (SLEdge*)BLI_ghash_lookup(ss->edges, hashkey);
+    _vertRemoveEdge(edge->v0, edge, ss);
+    _vertRemoveEdge(edge->v1, edge, ss);
+    // then delete it
+    BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeEdge);
+    ss->numEdges--;
+}
+
+void SL_SubSurf_syncFaceDel(SLSubSurf *ss, void *hashkey) {
+    // Disconnect face;
+    LinkNode *itVert, *itEdge;
+    SLFace *face = (SLFace*)BLI_ghash_lookup(ss->edges, hashkey);
+    itVert = face->verts;
+    itEdge = face->edges;
+    for (int i = 0; i < face->numVerts; i++) {
+        _vertRemoveFace((SLVert*)itVert->link, face, ss);
+        _edgeRemoveFace((SLEdge*)itEdge->link, face, ss);
+        itVert = itVert->next;
+        itEdge = itEdge->next;
+    }
+    // then delete it
+    BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeFace);
+    ss->numFaces--;
 }
 
 /////////////////////////////////////////////////////////////
