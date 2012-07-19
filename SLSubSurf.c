@@ -11,7 +11,7 @@
    DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
    TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
 
-   0. You just DO WHAT THE FUCK YOU WANT TO. 
+   0. You just DO WHAT THE FUCK YOU WANT TO.
  */
 
 #include "SLSubSurf.h"
@@ -42,7 +42,7 @@ int SL_giveNumberOfInternalEdges(SLFace *face) {
 }
 
 /////////////////////////////////////////////////////////////
-// External helpers 
+// External helpers
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss) {
 	// Simple things first, corners and interpolated edge verts;
@@ -160,17 +160,17 @@ void BLI_linklist_remove(LinkNode **list, void *item) {
 		MEM_freeN(*list);
 		*list = tmp;
 		return;
-	}
-
-	LinkNode *prev = *list;
-	LinkNode *node = prev->next;
-	while (node != NULL) {
-		if (node->link == item) {
-			prev->next = node->next; // Connect the previous node
-			MEM_freeN(*list);
+	} else {
+		LinkNode *prev = *list;
+		LinkNode *node = prev->next;
+		while (node != NULL) {
+			if (node->link == item) {
+				prev->next = node->next; // Connect the previous node
+				MEM_freeN(*list);
+			}
+			prev = node;
+			node = node->next;
 		}
-		prev = node;
-		node = node->next;
 	}
 }
 
@@ -186,7 +186,7 @@ static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
 	v->numFaces--;
 }
 
-///// 
+/////
 
 static void _vertAddEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
 	BLI_linklist_prepend(&v->edges, e);
@@ -200,7 +200,7 @@ static void _vertRemoveEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
 	v->numEdges--;
 }
 
-///// 
+/////
 
 static void _edgeAddFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
 	BLI_linklist_prepend(&e->faces, f);
@@ -225,11 +225,11 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 			}
 		}
 	}
-	return NULL; 
+	return NULL;
 }
 
 /////////////////////////////////////////////////////////////
-// Note! Must be added as verts, then edges, then faces and removed in the opposite order 
+// Note! Must be added as verts, then edges, then faces and removed in the opposite order
 
 void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
 	SLVert *vert;
@@ -304,15 +304,18 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 
 // Must be called after syncEdge
 void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
-	if ( BLI_ghash_lookup(ss->faces, hashkey) != NULL ) { 
+	int i;
+	SLEdge *edge;
+	SLVert *vert, *nextVert;
+	SLFace *face;
+
+	if ( BLI_ghash_lookup(ss->faces, hashkey) != NULL ) {
 		return; // Nothing can change be updated for existing faces.
 	}
 
 	// New face? Then;
-	int i;
-	SLEdge *edge;
-	SLVert *vert, *nextVert;
-	SLFace *face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
+
+	face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
 
 	// Static lists for faces maybe?
 	//face->verts = (SLVert**)MEM_allocN(sizeof(SLVert*)*numVerts);
@@ -546,7 +549,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 						SLEdge *tempEdge = (SLEdge*)it2->link;
 						if ( tempEdge != edge ) {
 							// Check for a shared node;
-							if ( tempEdge->v0 == edge->v0 || 
+							if ( tempEdge->v0 == edge->v0 ||
 									tempEdge->v0 == edge->v1 ||
 									tempEdge->v1 == edge->v0 ||
 									tempEdge->v1 == edge->v1) {
