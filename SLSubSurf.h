@@ -102,4 +102,4 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam
 void SL_SubSurf_syncEdge(SLSubSurf *ss, void* hashkey, void *vertkey0, void *vertkey1, float sharpness);
 void SL_SubSurf_syncFace(SLSubSurf *ss, void* hashkey, int numVerts, void **vertkeys);
 
-
+void SL_SubSurf_processSync(SLSubSurf *ss);

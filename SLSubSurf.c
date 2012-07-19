@@ -376,7 +376,7 @@ void SL_SubSurf_syncFaceDel(SLSubSurf *ss, void *hashkey) {
 /////////////////////////////////////////////////////////////
 // Actual smoothing stuff
 
-void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
+void SL_SubSurf_processSync(SLSubSurf *ss) {
 	SLFace *face;
 	SLEdge *edge;
 	SLVert *vert;
