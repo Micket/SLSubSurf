@@ -39,7 +39,6 @@ struct SLVert {
     unsigned short numEdges, numFaces;
 
     unsigned short requiresUpdate, seam;
-    float crease; // Support node creases as well (why not?)
 
     // Smoothed position;
     float sl_coords[3];
@@ -53,7 +52,7 @@ struct SLEdge {
     unsigned short numFaces;
     unsigned short requiresUpdate;
 
-    float crease;
+    float sharpness;
 
     float centroid[3];
 
@@ -100,7 +99,7 @@ void SL_SubSurf_free(SLSubSurf *ss);
 
 // This code basically adds verts i suppose.
 void SL_SubSurf_syncVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
-void SL_SubSurf_syncEdge(SLSubSurf *ss, void* hashkey, void *vertkey0, void *vertkey1, float crease);
+void SL_SubSurf_syncEdge(SLSubSurf *ss, void* hashkey, void *vertkey0, void *vertkey1, float sharpness);
 void SL_SubSurf_syncFace(SLSubSurf *ss, void* hashkey, int numVerts, void **vertkeys);
 
 

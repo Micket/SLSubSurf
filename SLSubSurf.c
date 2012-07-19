@@ -270,7 +270,7 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 }
 
 // Must be called after syncVert
-void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float crease) {
+void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float sharpness) {
 	SLEdge *edge;
 
 	if ( (edge = BLI_ghash_lookup(ss->edges, hashkey)) == NULL ) {
@@ -280,7 +280,7 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 		edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
 		edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
 		edge->faces = NULL;
-		edge->crease = crease;
+		edge->sharpness = sharpness;
 		edge->requiresUpdate = 1;
 
 		_vertAddEdge(edge->v0, edge, ss);
@@ -289,9 +289,9 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 		// Add to hashmap
 		BLI_ghash_insert(ss->edges, hashkey, edge);
 	} else {
-		// This means that crease has changed (v0 and v1 aren't allowed to change, that would indicate a *new* edge)
+		// This means that sharpness has changed (v0 and v1 aren't allowed to change, that would indicate a *new* edge)
 		LinkNode *it;
-		edge->crease = crease;
+		edge->sharpness = sharpness;
 		// Affects the directly connected faces and verts
 		edge->v0->requiresUpdate = 1;
 		edge->v1->requiresUpdate = 1;
@@ -378,8 +378,8 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 	SLEdge *edge;
 	SLVert *vert;
 	LinkNode *it;
-	float avgCrease;
-	int seamCount, creaseCount;
+	float avgSharpness;
+	int seamCount, sharpnessCount;
 	int seam;
 
 	// Compute centroid, used for smoothing and other things;
@@ -409,10 +409,10 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		if (!vert->requiresUpdate) continue;
 
-		// Compute average crease and seam;
+		// Compute average sharpness and seam;
 		seamCount = 0;
-		creaseCount = 0;
-		avgCrease = 0.0f;
+		sharpnessCount = 0;
+		avgSharpness = 0.0f;
 		seam = vert->seam;
 		FOR_LIST(it, face->verts) {
 			edge = (SLEdge*)it->link;
@@ -420,16 +420,16 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 			if (seam && edge->numFaces < 2)
 				seamCount++;
 
-			if (edge->crease != 0.0f) {
-				creaseCount++;
-				avgCrease += edge->crease;
+			if (edge->sharpness != 0.0f) {
+				sharpnessCount++;
+				avgSharpness += edge->sharpness;
 			}
 		}
 
-		if (creaseCount) {
-			avgCrease /= creaseCount;
-			if ( avgCrease > 1.0f ) {
-				avgCrease = 1.0f;
+		if (sharpnessCount) {
+			avgSharpness /= sharpnessCount;
+			if ( avgSharpness > 1.0f ) {
+				avgSharpness = 1.0f;
 			}
 		}
 
@@ -465,8 +465,43 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 
 			Vec3Mult(vert->sl_coords, 1.0f / ( 4 + avgCount) );
 		}
-		// TODO: Crease it?
-		//for (int x = 0; x < 3; x++) vert->sl_coords[x] = (1.0f - crease)*vert->sl_coords[x] + crease*vert->coords[x];
+
+		// Deal with sharpness and seams
+		// Code snipped converted from CCG (undocumented mystery code)
+		if ((sharpnessCount > 1 && vert->numFaces) || seam) {
+			int x;
+			float q[3];
+
+			if (seam) {
+				avgSharpness = 1.0f;
+				sharpnessCount = seamCount;
+			}
+
+			Vec3Zero(q);
+			FOR_LIST(it, vert->edges) {
+				edge = (SLEdge*)it->link;
+				if (seam) {
+					if (edge->numFaces < 2)
+						Vec3Add(q, edge->centroid);
+				}
+				else if (edge->sharpness != 0.0f) {
+					Vec3Add(q, edge->centroid);
+				}
+			}
+
+			Vec3Mult(q, 1.0f / sharpnessCount);
+
+			if (sharpnessCount != 2 || seam) {
+				/* q = q + (co - q) * avgSharpness */
+				for (x = 0; x < 3; x++) q[x] += (vert->coords[x] - q[x])*avgSharpness;
+			}
+
+			/* r = co * 0.75 + q * 0.25 */
+			for (x = 0; x < 3; x++) q[x] = vert->coords[x]*0.75f + q[x]*0.25f;
+
+			/* nCo = nCo + (r - nCo) * avgSharpness */
+			for (x = 0; x < 3; x++) vert->sl_coords[x] += (q[x] - vert->sl_coords[x]) * avgSharpness;
+		}
 	}
 
 	// Loop over edges and smooth
@@ -475,7 +510,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 		if (!edge->requiresUpdate) continue;
 
 		// Create the interpolated coordinates
-		if (edge->numFaces < 2 || edge->crease >= 1.0f) { // If its an edge, or maximum crease, then just average.
+		if (edge->numFaces < 2 || edge->sharpness >= 1.0f) { // If its an edge, or maximum sharpness, then just average.
 			Vec3Copy(edge->sl_coords, edge->centroid);
 		} else { // Otherwise smooth
 			int avgCount;
@@ -524,11 +559,11 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 			}
 			Vec3Mult(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));
 
-			// And take into account crease
-			if (edge->crease > 0.0f ) {
+			// And take into account sharpness
+			if (edge->sharpness > 0.0f ) {
 				int x;
 				for (x = 0; x < 3; x++) {
-					edge->sl_coords[x] = edge->sl_coords[x] + edge->crease * (edge->centroid[x] - edge->sl_coords[x]);
+					edge->sl_coords[x] = edge->sl_coords[x] + edge->sharpness * (edge->centroid[x] - edge->sl_coords[x]);
 				}
 			}
 		}
