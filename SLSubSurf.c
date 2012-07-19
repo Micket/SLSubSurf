@@ -476,9 +476,7 @@ void SL_SubSurf_subdivideAll(SLSubSurf *ss) {
 
 		// Create the interpolated coordinates
 		if (edge->numFaces < 2 || edge->crease >= 1.0f) { // If its an edge, or maximum crease, then just average.
-			int x;
-			for (x = 0; x < 3; x++)
-				edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
+			Vec3Copy(edge->sl_coords, edge->centroid);
 		} else { // Otherwise smooth
 			int avgCount;
 			// Now, this is a bit tricky to deal with ngons. Quads and tris only would be a lot simpler.
