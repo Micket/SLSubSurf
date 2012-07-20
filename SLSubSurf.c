@@ -41,6 +41,10 @@ int SL_giveNumberOfInternalEdges(SLFace *face) {
 	return face->numVerts;
 }
 
+int SL_giveNumberOfInternalLoops(SLFace *face) {
+	return (face->numVerts == 3) ? 12 : face->numVerts*4;
+}
+
 /////////////////////////////////////////////////////////////
 // External helpers
 
@@ -71,6 +75,17 @@ int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
 	}
 	return totFaces;
 }
+
+int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
+	// Since we know that all subdivided elements have the same number of sub-faces;
+	int totLoops = 0; // One new node per edge
+	// Then faces, which varies;
+	FOR_HASH(ss->it, ss->faces) {
+		totLoops += SL_giveNumberOfInternalLoops((SLFace*)BLI_ghashIterator_getValue(ss->it));
+	}
+	return totLoops;
+}
+
 
 /////////////////////////////////////////////////////////////
 

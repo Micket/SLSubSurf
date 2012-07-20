@@ -11,7 +11,7 @@
             DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
    TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
 
-  0. You just DO WHAT THE FUCK YOU WANT TO. 
+  0. You just DO WHAT THE FUCK YOU WANT TO.
 */
 
 #include "BLI_linklist.h"
@@ -87,13 +87,15 @@ struct SLSubSurf {
 int SL_giveNumberOfInternalFaces(SLFace *face);
 int SL_giveNumberOfInternalNodes(SLFace *face);
 int SL_giveNumberOfInternalEdges(SLFace *face);
+int SL_giveNumberOfInternalLoops(SLFace *face);
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss);
+int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss);
 
 
-SLSubSurf* SL_SubSurf_new(int smoothing); 
+SLSubSurf* SL_SubSurf_new(int smoothing);
 void SL_SubSurf_free(SLSubSurf *ss);
 
 
