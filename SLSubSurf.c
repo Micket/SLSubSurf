@@ -16,8 +16,8 @@
 
 #include "SLSubSurf.h"
 #include "stdlib.h"
-//#include "MEM_guardedalloc.h"
-void MEM_freeN(void *ptr);
+#include "MEM_guardedalloc.h"
+#include "BLI_math_vector.h"
 
 // Convenient macro for looping through linked lists (which is done a lot)
 #define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
@@ -84,34 +84,6 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
 		totLoops += SL_giveNumberOfInternalLoops((SLFace*)BLI_ghashIterator_getValue(ss->it));
 	}
 	return totLoops;
-}
-
-
-/////////////////////////////////////////////////////////////
-
-inline void Vec3Zero(float a[3]) {
-	int x;
-	for (x = 0; x < 3; x++) a[x] = 0.0;
-}
-
-inline void Vec3Mult(float a[3], float b) {
-	int x;
-	for (x = 0; x < 3; x++) a[x] *= b;
-}
-
-inline void Vec3Add(float a[3], float b[3]) {
-	int x;
-	for (x = 0; x < 3; x++) a[x] += b[x];
-}
-
-inline void Vec3AddMult(float a[3], float b[3], float mult) {
-	int x;
-	for (x = 0; x < 3; x++) a[x] += mult*b[x];
-}
-
-inline void Vec3Copy(float a[3], float b[3]) {
-	int x;
-	for (x = 0; x < 3; x++) a[x] = b[x];
 }
 
 /////////////////////////////////////////////////////////////
@@ -251,7 +223,7 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 
 	if ( (vert = BLI_ghash_lookup(ss->verts, hashkey)) == NULL ) { // Then new vert
 		SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
-		Vec3Copy(vert->coords, coords);
+		copy_v3_v3(vert->coords, coords);
 		vert->edges = NULL;
 		vert->faces = NULL;
 		vert->numFaces = 0;
@@ -264,7 +236,7 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 	} else {
 		// Then existing vert has moved (TODO: Should I split this function?)
 		LinkNode *it;
-		Vec3Copy(vert->coords, coords);
+		copy_v3_v3(vert->coords, coords);
 		vert->seam = seam;
 		// Connected edges and faces need to updated
 		FOR_LIST(it, vert->faces) {
@@ -405,12 +377,12 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
 		if (face->requiresUpdate) continue;
 
-		Vec3Zero(face->centroid);
+		zero_v3(face->centroid);
 
 		FOR_LIST(it, face->verts) {
-			Vec3Add(face->centroid, ((SLVert*)it->link)->coords);
+			add_v3_v3(face->centroid, ((SLVert*)it->link)->coords);
 		}
-		Vec3Mult(face->centroid, 1.0f / face->numVerts );
+		mul_v3_fl(face->centroid, 1.0f / face->numVerts );
 	}
 	// also for edges;
 	FOR_HASH(ss->it, ss->edges) {
@@ -426,7 +398,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 	FOR_HASH(ss->it, ss->verts) {
 		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		if (!vert->requiresUpdate) continue;
-		if (!ss->smoothing) Vec3Copy(vert->sl_coords, vert->coords);
+		if (!ss->smoothing) copy_v3_v3(vert->sl_coords, vert->coords);
 
 		// Compute average sharpness and seam;
 		seamCount = 0;
@@ -460,29 +432,29 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		{
 			int avgCount, edgeMult;
 
-			Vec3Zero(vert->sl_coords);
+			zero_v3(vert->sl_coords);
 
 			// Original coordinate, weight 4 (is this correct?)
-			Vec3AddMult(vert->sl_coords, vert->coords, 4);
+			madd_v3_v3fl(vert->sl_coords, vert->coords, 4);
 			avgCount = 4;
 
 			// Weights for edges are multiple of shared faces;
 			FOR_LIST(it, vert->edges) {
 				edge = (SLEdge*)it->link;
 				edgeMult = edge->numFaces == 0 ? 1 : edge->numFaces;
-				Vec3AddMult(vert->sl_coords, edge->centroid, edgeMult);
+				madd_v3_v3fl(vert->sl_coords, edge->centroid, edgeMult);
 				avgCount += edgeMult;
 			}
 
 			FOR_LIST(it, vert->faces) {
 				face = (SLFace*)it->link;
 				if (face->numVerts > 3) {
-					Vec3Add(vert->sl_coords, face->centroid);
+					add_v3_v3(vert->sl_coords, face->centroid);
 					avgCount++; // Note that the subdivided area is a quad for any ngon > 3
 				}
 			}
 
-			Vec3Mult(vert->sl_coords, 1.0f / ( 4 + avgCount) );
+			mul_v3_fl(vert->sl_coords, 1.0f / ( 4 + avgCount) );
 		}
 
 		// Deal with sharpness and seams
@@ -496,19 +468,19 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 				sharpnessCount = seamCount;
 			}
 
-			Vec3Zero(q);
+			zero_v3(q);
 			FOR_LIST(it, vert->edges) {
 				edge = (SLEdge*)it->link;
 				if (seam) {
 					if (edge->numFaces < 2)
-						Vec3Add(q, edge->centroid);
+						add_v3_v3(q, edge->centroid);
 				}
 				else if (edge->sharpness != 0.0f) {
-					Vec3Add(q, edge->centroid);
+					add_v3_v3(q, edge->centroid);
 				}
 			}
 
-			Vec3Mult(q, 1.0f / sharpnessCount);
+			mul_v3_fl(q, 1.0f / sharpnessCount);
 
 			if (sharpnessCount != 2 || seam) {
 				/* q = q + (co - q) * avgSharpness */
@@ -530,15 +502,15 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 
 		// Create the interpolated coordinates
 		if (!ss->smoothing || edge->numFaces < 2 || edge->sharpness >= 1.0f) { // If its an edge, or maximum sharpness, then just average.
-			Vec3Copy(edge->sl_coords, edge->centroid);
+			copy_v3_v3(edge->sl_coords, edge->centroid);
 		} else { // Otherwise smooth
 			int avgCount;
 			// Now, this is a bit tricky to deal with ngons. Quads and tris only would be a lot simpler.
 			// Problem is to take into account edges appropriately.
 
-			Vec3Copy(edge->sl_coords, edge->v0->coords);
-			Vec3Add(edge->sl_coords, edge->v1->coords);
-			Vec3Mult(edge->sl_coords, 2);
+			copy_v3_v3(edge->sl_coords, edge->v0->coords);
+			add_v3_v3(edge->sl_coords, edge->v1->coords);
+			mul_v3_fl(edge->sl_coords, 2);
 			avgCount = 4;
 
 			FOR_LIST(it, edge->faces) {
@@ -550,14 +522,14 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 					FOR_LIST(it2, vert->edges) {
 						SLEdge *tempEdge = (SLEdge*)it2->link;
 						if ( tempEdge != edge ) { // Then opposite edge
-							Vec3AddMult(edge->sl_coords, tempEdge->centroid, 2);
+							madd_v3_v3fl(edge->sl_coords, tempEdge->centroid, 2);
 						}
 					}
 					avgCount += 4; // 2 edges each
 				} else {
 					LinkNode *it2;
 					// Otherwise all ngons are split into quads, leaving one center node and edges
-					Vec3AddMult(edge->sl_coords, face->centroid, 2);
+					madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
 					avgCount += 2;
 					// Now find the other edges that share a node;
 					FOR_LIST(it2, vert->edges) {
@@ -568,21 +540,21 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 									tempEdge->v0 == edge->v1 ||
 									tempEdge->v1 == edge->v0 ||
 									tempEdge->v1 == edge->v1) {
-								Vec3Add(edge->sl_coords, tempEdge->centroid);
+								add_v3_v3(edge->sl_coords, tempEdge->centroid);
 							}
 						}
 					}
 					avgCount += 4; // 1x2 from centroid + 2x1 from edges
 				}
-				Vec3AddMult(edge->sl_coords, face->centroid, 2);
+				madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
 			}
-			Vec3Mult(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));
+			mul_v3_fl(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));
 
 			// And take into account sharpness
 			if (edge->sharpness > 0.0f ) {
 				int x;
 				for (x = 0; x < 3; x++) {
-					edge->sl_coords[x] = edge->sl_coords[x] + edge->sharpness * (edge->centroid[x] - edge->sl_coords[x]);
+					edge->sl_coords[x] += edge->sharpness * (edge->centroid[x] - edge->sl_coords[x]);
 				}
 			}
 		}
