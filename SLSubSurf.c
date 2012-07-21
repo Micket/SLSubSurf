@@ -454,7 +454,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 				}
 			}
 
-			mul_v3_fl(vert->sl_coords, 1.0f / ( 4 + avgCount) );
+			mul_v3_fl(vert->sl_coords, 1.0f / avgCount );
 		}
 
 		// Deal with sharpness and seams
