@@ -220,16 +220,14 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 
 void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
 	SLVert *vert;
-
 	if ( (vert = BLI_ghash_lookup(ss->verts, hashkey)) == NULL ) { // Then new vert
-		SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
+		vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
 		copy_v3_v3(vert->coords, coords);
 		vert->edges = NULL;
 		vert->faces = NULL;
 		vert->numFaces = 0;
 		vert->numEdges = 0;
 		vert->seam = seam;
-
 		// Add to hashmap
 		BLI_ghash_insert(ss->verts, hashkey, vert);
 		ss->numVerts++;
@@ -262,7 +260,7 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 
 	if ( (edge = BLI_ghash_lookup(ss->edges, hashkey)) == NULL ) {
 		// Then new edge
-		SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
+		edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
 
 		edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
 		edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
@@ -373,6 +371,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 	int seam;
 
 	// Compute centroid, used for smoothing and other things;
+	printf("Computing face centroids\n");
 	FOR_HASH(ss->it, ss->faces) {
 		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
 		if (face->requiresUpdate) continue;
@@ -393,7 +392,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		for (x = 0; x < 3; x++)
 			edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
 	}
-
+	printf("Computing vert smoothing\n");
 	// Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
 	FOR_HASH(ss->it, ss->verts) {
 		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
@@ -495,6 +494,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		}
 	}
 
+	printf("Computing edge smoothing\n");
 	// Loop over edges and smooth
 	FOR_HASH(ss->it, ss->edges) {
 		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
