@@ -121,7 +121,6 @@ SLSubSurf* SL_SubSurf_new(int smoothing) {
 	ss->numVerts = ss->numEdges = ss->numFaces = 0;
 	ss->memArena = ma;
 	ss->smoothing = smoothing;
-
 	return ss;
 }
 
@@ -299,16 +298,13 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vert
 	}
 
 	// New face? Then;
-
 	face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
-
 	// Static lists for faces maybe?
 	//face->verts = (SLVert**)MEM_allocN(sizeof(SLVert*)*numVerts);
 	//face->edges = (SLEdge**)MEM_allocN(sizeof(SLEdge*)*numVerts);
 
 	face->numVerts = numVerts;
 	face->requiresUpdate = 1;
-
 	for (i = 0; i < numVerts; i++) {
 		// Verts
 		vert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[i]);
@@ -392,6 +388,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		for (x = 0; x < 3; x++)
 			edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
 	}
+
 	printf("Computing vert smoothing\n");
 	// Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
 	FOR_HASH(ss->it, ss->verts) {
@@ -404,7 +401,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		sharpnessCount = 0;
 		avgSharpness = 0.0f;
 		seam = vert->seam;
-		FOR_LIST(it, face->verts) {
+		FOR_LIST(it, vert->edges) {
 			edge = (SLEdge*)it->link;
 
 			if (seam && edge->numFaces < 2)
@@ -519,7 +516,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 					LinkNode *it2;
 					// Triangles are split differently from the rest;
 					// There are connections to the center nodes of the two opposite edges
-					FOR_LIST(it2, vert->edges) {
+					FOR_LIST(it2, face->edges) {
 						SLEdge *tempEdge = (SLEdge*)it2->link;
 						if ( tempEdge != edge ) { // Then opposite edge
 							madd_v3_v3fl(edge->sl_coords, tempEdge->centroid, 2);
@@ -532,7 +529,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 					madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
 					avgCount += 2;
 					// Now find the other edges that share a node;
-					FOR_LIST(it2, vert->edges) {
+					FOR_LIST(it2, face->edges) {
 						SLEdge *tempEdge = (SLEdge*)it2->link;
 						if ( tempEdge != edge ) {
 							// Check for a shared node;
