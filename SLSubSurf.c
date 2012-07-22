@@ -386,7 +386,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 		if (!edge->requiresUpdate) continue;
 
 		for (x = 0; x < 3; x++)
-			edge->sl_coords[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
+			edge->centroid[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
 	}
 
 	printf("Computing vert smoothing\n");
