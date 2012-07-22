@@ -264,6 +264,7 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 		edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
 		edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
 		edge->faces = NULL;
+		edge->numFaces = 0;
 		edge->sharpness = sharpness;
 		edge->requiresUpdate = 1;
 
