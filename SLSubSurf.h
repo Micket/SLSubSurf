@@ -110,6 +110,7 @@ void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys);
 void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops);
 void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges);
 void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts);
+void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces);
 
 SLSubSurf* SL_SubSurf_new(int smoothing);
 void SL_SubSurf_free(SLSubSurf *ss);

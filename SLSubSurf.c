@@ -206,12 +206,60 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
 				mloops[i+1].v = eNext->newMetaIdx + ss->numVerts;
 				mloops[i+1].e = face->newEdgeStartIdx + j;
 				// then to midpoint
-				mloops[i+2].v = vert->newVertIdx;
+				mloops[i+2].v = face->newVertIdx;
 				mloops[i+2].e = face->newEdgeStartIdx + prevJ;
 				// then to previous edge,
 				mloops[i+3].v = ePrev->newMetaIdx + ss->numVerts;
 				mloops[i+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
 				i += 4;
+			}
+		}
+	}
+}
+
+void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
+{
+	int i = 0, j, prevJ, subEdgeNext, subEdgePrev;
+	SLFace *face;
+	SLVert *vert;
+	SLEdge *eNext, *ePrev;
+
+	FOR_HASH(ss->it, ss->faces) {
+		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		if (face->numVerts == 3) {
+			// First the corner triangles
+			for (j = 0; j < 3; j++) {
+				prevJ = (j + 2) % 3;
+				eNext = face->edges[j];
+				ePrev = face->edges[prevJ];
+				vert = face->verts[j];
+
+				mfaces[i].v1 = vert->newVertIdx;
+				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
+				mfaces[i].v3 = ePrev->newMetaIdx + ss->numVerts;
+				mfaces[i].v4 = -1;
+				i += 1;
+			}
+
+			mfaces[i].v1 = face->edges[0]->newMetaIdx + ss->numVerts;
+			mfaces[i].v2 = face->edges[1]->newMetaIdx + ss->numVerts;
+			mfaces[i].v3 = face->edges[2]->newMetaIdx + ss->numVerts;
+			mfaces[i].v4 = -1;
+
+			i += 1;
+		} else {
+			for (j = 0; j < face->numVerts; j++) { // Loop over each sub-quad;
+				// Unsure if i negative values work, adding numVerts just in case.
+				prevJ = (j - 1 + face->numVerts) % face->numVerts;
+				eNext = face->edges[j];
+				ePrev = face->edges[prevJ];
+				vert = face->verts[j];
+
+				mfaces[i].v1 = vert->newVertIdx;
+				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
+				mfaces[i].v3 = vert->newVertIdx;
+				mfaces[i].v4 = ePrev->newMetaIdx + ss->numVerts;
+				i += 1;
 			}
 		}
 	}
