@@ -14,13 +14,15 @@
   0. You just DO WHAT THE FUCK YOU WANT TO.
 */
 
-#include "BLI_linklist.h"
-#include "BLI_ghash.h"
-#include "BLI_memarena.h"
-
-typedef struct MLoop MLoop;
+typedef struct MVert MVert;
 typedef struct MEdge MEdge;
+typedef struct MLoop MLoop;
 typedef struct MPoly MPoly;
+typedef struct DMFlagMat DMFlagMat;
+typedef struct MemArena MemArena;
+typedef struct GHash GHash;
+typedef struct GHashIterator GHashIterator;
+typedef struct LinkNode LinkNode;
 
 typedef struct SLSubSurf SLSubSurf;
 typedef struct SLFace SLFace;
@@ -104,8 +106,10 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss);
 
 // Methods for obtaining the loops and edges internal to the face. Uses the newIdx variables for numbering.
 // Sufficient memory should be allocated by caller. Returns number of loops for sub face (will always be 3 or 4)
-void SL_giveSubLoopInFace(SLSubSurf *ss, SLFace *face, int *loopCount, int *polyCount, MLoop *mloops, MPoly *mpolys);
-void SL_giveSubEdgeInFace(SLSubSurf *ss, SLFace *face,  MEdge *medges);
+void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys);
+void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops);
+void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges);
+void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts);
 
 SLSubSurf* SL_SubSurf_new(int smoothing);
 void SL_SubSurf_free(SLSubSurf *ss);

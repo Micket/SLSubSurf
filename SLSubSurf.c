@@ -16,9 +16,13 @@
 
 #include "SLSubSurf.h"
 #include "stdlib.h"
-#include "MEM_guardedalloc.h"
 #include "BLI_math_vector.h"
+#include "BLI_linklist.h"
+#include "BLI_ghash.h"
+#include "BLI_memarena.h"
+#include "MEM_guardedalloc.h"
 #include "DNA_meshdata_types.h"
+#include "BKE_DerivedMesh.h"
 
 // Convenient macro for looping through linked lists (which is done a lot)
 #define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
@@ -113,87 +117,107 @@ void SL_renumberAll(SLSubSurf *ss)
 	}
 }
 
-// Function increases the loopCount and polyCount and continuously writes to mloops and mpolys
-// with all the subpolys in "face" (basically for copying data back to DerivedMesh)
-void SL_giveSubLoopInFace(SLSubSurf *ss, SLFace *face, int *loopCount, int *polyCount, MLoop *mloops, MPoly *mpolys)
+void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys)
 {
-	int j, prevJ, subEdgeNext, subEdgePrev;
-	SLVert *vert;
-	SLEdge *eNext, *ePrev;
-
-	if (face->numVerts == 3) {
-		// First the corner triangles
-		for (j = 0; j < 3; j++) {
-			prevJ = (j + 2) % 3;
-			eNext = face->edges[j];
-			ePrev = face->edges[prevJ];
-			vert = face->verts[j];
-
-			// Check ordering of edge (to determine which sub-edge should be used)
-			subEdgeNext = eNext->v0 != vert;
-			subEdgePrev = ePrev->v0 != vert;
-
-			// TODO: Other data, such as material number? (why is that part of the poly!?)
-			// For now, expect it to be filled by caller.
-			mpolys[*polyCount].loopstart = *loopCount;
-			mpolys[*polyCount].totloop = 3;
-			*polyCount += 1;
-			// Corner to next edge;
-			mloops[*loopCount+0].v = vert->newVertIdx;
-			mloops[*loopCount+0].e = eNext->newMetaIdx*2 + subEdgeNext;
-			// next edge node to internal edge j;
-			mloops[*loopCount+1].v = eNext->newMetaIdx + ss->numVerts;
-			mloops[*loopCount+1].e = face->newEdgeStartIdx + j;
-			// previous edge node to previous edge;
-			mloops[*loopCount+2].v = ePrev->newMetaIdx + ss->numVerts;
-			mloops[*loopCount+2].e = ePrev->newMetaIdx*2 + subEdgePrev;
-			loopCount += 3;
-		}
-
-		// Last poly is the center polygon, only internal edges and edge nodes
-		mpolys[*polyCount+3].loopstart = *loopCount;
-		mpolys[*polyCount+3].totloop = 3;
-		*polyCount += 1;
-		mloops[*loopCount+0].v = face->edges[2]->newMetaIdx + ss->numVerts;
-		mloops[*loopCount+0].e = face->newEdgeStartIdx;
-		mloops[*loopCount+1].v = face->edges[0]->newMetaIdx + ss->numVerts;
-		mloops[*loopCount+1].e = face->newEdgeStartIdx+1;
-		mloops[*loopCount+2].v = face->edges[1]->newMetaIdx + ss->numVerts;
-		mloops[*loopCount+2].e = face->newEdgeStartIdx+2;
-		*loopCount += 3;
-	} else {
-		for (j = 0; j < face->numVerts; j++) { // Loop over each sub-quad;
-			// Unsure if i negative values work, adding numVerts just in case.
-			prevJ = (j - 1 + face->numVerts) % face->numVerts;
-			eNext = face->edges[j];
-			ePrev = face->edges[prevJ];
-			vert = face->verts[j];
-
-			// Check ordering of edge (to determine which sub-edge should be used)
-			subEdgeNext = eNext->v0 != vert;
-			subEdgePrev = ePrev->v0 != vert;
-
-			mpolys[*polyCount].loopstart = *loopCount;
-			mpolys[*polyCount].totloop = 4;
-			*polyCount += 1;
-			// Starting from the corner node
-			mloops[*loopCount+0].v = vert->newVertIdx;
-			mloops[*loopCount+0].e = eNext->newMetaIdx*2 + subEdgeNext;
-			// go to next edge
-			mloops[*loopCount+1].v = eNext->newMetaIdx + ss->numVerts;
-			mloops[*loopCount+1].e = face->newEdgeStartIdx + j;
-			// then to midpoint
-			mloops[*loopCount+2].v = vert->newVertIdx;
-			mloops[*loopCount+2].e = face->newEdgeStartIdx + prevJ;
-			// then to previous edge,
-			mloops[*loopCount+3].v = ePrev->newMetaIdx + ss->numVerts;
-			mloops[*loopCount+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
-			*loopCount += 4;
+	int i = 0, j, k;
+	FOR_HASH(ss->it, ss->faces) {
+		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		int flag = (faceFlags) ? faceFlags[i].flag : ME_SMOOTH;
+		int mat_nr = (faceFlags) ? faceFlags[i].mat_nr : 0;
+		if (face->numVerts == 3) {
+			for (j = 0; j < 3; j++) {
+				mpolys[i].loopstart = k;
+				mpolys[i].totloop = 3;
+				mpolys[i].mat_nr = mat_nr;
+				mpolys[i].flag = flag;
+				i += 1;
+				k += 3;
+			}
+		} else {
+			for (j = 0; j < face->numVerts; j++) {
+				mpolys[i].loopstart = k;
+				mpolys[i].totloop = 4;
+				mpolys[i].mat_nr = mat_nr;
+				mpolys[i].flag = flag;
+				i += 1;
+				k += 4;
+			}
 		}
 	}
 }
 
-void SL_giveSubEdgeInFace(SLSubSurf *ss, SLFace *face,  MEdge *medges)
+void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
+{
+	int i = 0, j, prevJ, subEdgeNext, subEdgePrev;
+	SLFace *face;
+	SLVert *vert;
+	SLEdge *eNext, *ePrev;
+
+	FOR_HASH(ss->it, ss->faces) {
+		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		if (face->numVerts == 3) {
+			// First the corner triangles
+			for (j = 0; j < 3; j++) {
+				prevJ = (j + 2) % 3;
+				eNext = face->edges[j];
+				ePrev = face->edges[prevJ];
+				vert = face->verts[j];
+
+				// Check ordering of edge (to determine which sub-edge should be used)
+				subEdgeNext = eNext->v0 != vert;
+				subEdgePrev = ePrev->v0 != vert;
+
+				// Corner to next edge;
+				mloops[i+0].v = vert->newVertIdx;
+				mloops[i+0].e = eNext->newMetaIdx*2 + subEdgeNext;
+				// next edge node to internal edge j;
+				mloops[i+1].v = eNext->newMetaIdx + ss->numVerts;
+				mloops[i+1].e = face->newEdgeStartIdx + j;
+				// previous edge node to previous edge;
+				mloops[i+2].v = ePrev->newMetaIdx + ss->numVerts;
+				mloops[i+2].e = ePrev->newMetaIdx*2 + subEdgePrev;
+				i += 3;
+			}
+
+			// Last poly is the center polygon, only internal edges and edge nodes
+			mloops[i+0].v = face->edges[2]->newMetaIdx + ss->numVerts;
+			mloops[i+0].e = face->newEdgeStartIdx;
+			mloops[i+1].v = face->edges[0]->newMetaIdx + ss->numVerts;
+			mloops[i+1].e = face->newEdgeStartIdx+1;
+			mloops[i+2].v = face->edges[1]->newMetaIdx + ss->numVerts;
+			mloops[i+2].e = face->newEdgeStartIdx+2;
+			i += 3;
+		} else {
+			for (j = 0; j < face->numVerts; j++) { // Loop over each sub-quad;
+				// Unsure if i negative values work, adding numVerts just in case.
+				prevJ = (j - 1 + face->numVerts) % face->numVerts;
+				eNext = face->edges[j];
+				ePrev = face->edges[prevJ];
+				vert = face->verts[j];
+
+				// Check ordering of edge (to determine which sub-edge should be used)
+				subEdgeNext = eNext->v0 != vert;
+				subEdgePrev = ePrev->v0 != vert;
+
+				// Starting from the corner node
+				mloops[i+0].v = vert->newVertIdx;
+				mloops[i+0].e = eNext->newMetaIdx*2 + subEdgeNext;
+				// go to next edge
+				mloops[i+1].v = eNext->newMetaIdx + ss->numVerts;
+				mloops[i+1].e = face->newEdgeStartIdx + j;
+				// then to midpoint
+				mloops[i+2].v = vert->newVertIdx;
+				mloops[i+2].e = face->newEdgeStartIdx + prevJ;
+				// then to previous edge,
+				mloops[i+3].v = ePrev->newMetaIdx + ss->numVerts;
+				mloops[i+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
+				i += 4;
+			}
+		}
+	}
+}
+
+void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges)
 {
 	/* For triangles;
     (0)
@@ -208,18 +232,59 @@ void SL_giveSubEdgeInFace(SLSubSurf *ss, SLFace *face,  MEdge *medges)
 
 	And ngons, the natural ordering is used
 	*/
-	if (face->numVerts == 3) {
-		medges[0].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
-		medges[0].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
-		medges[1].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
-		medges[1].v2 = ss->numVerts + face->edges[1]->newMetaIdx;
-		medges[2].v1 = ss->numVerts + face->edges[1]->newMetaIdx;
-		medges[2].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
-	} else {
-		int i;
-		for (i = 0; i < face->numVerts; i++) {
-			medges[i].v1 = ss->numVerts + face->edges[i]->newMetaIdx;
-			medges[i].v2 = face->newVertIdx;
+	int i = 0;
+	// First the original edges
+	FOR_HASH(ss->it, ss->edges) {
+		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
+		medges[i+0].v1 = edge->v0->newVertIdx;
+		medges[i+0].v2 = edge->newMetaIdx + ss->numVerts;
+		medges[i+1].v1 = edge->newMetaIdx + ss->numVerts;
+		medges[i+1].v2 = edge->v0->newVertIdx;
+		i += 2;
+	}
+	// Then the faces
+	FOR_HASH(ss->it, ss->faces) {
+		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		if (face->numVerts == 3) {
+			medges[i+0].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
+			medges[i+0].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
+			medges[i+1].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
+			medges[i+1].v2 = ss->numVerts + face->edges[1]->newMetaIdx;
+			medges[i+2].v1 = ss->numVerts + face->edges[1]->newMetaIdx;
+			medges[i+2].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
+			i += 3;
+		} else {
+			int j;
+			for (j = 0; j < face->numVerts; j++) {
+				medges[i].v1 = ss->numVerts + face->edges[j]->newMetaIdx;
+				medges[i].v2 = face->newVertIdx;
+				i++;
+			}
+		}
+	}
+}
+
+void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts)
+{
+	int i = 0;
+	FOR_HASH(ss->it, ss->verts) {
+		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
+		copy_v3_v3(mverts[i].co, vert->sl_coords);
+		//normal_float_to_short_v3(mverts[i].no, vert->normal);
+		i++;
+	}
+	FOR_HASH(ss->it, ss->edges) {
+		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
+		copy_v3_v3(mverts[i].co, edge->sl_coords);
+		//normal_float_to_short_v3(mverts[i].no, edge->normal);
+		i++;
+	}
+	FOR_HASH(ss->it, ss->edges) {
+		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		if (face->numVerts > 3) {
+			copy_v3_v3(mverts[i].co, face->centroid);
+			//normal_float_to_short_v3(mverts[i].no, face->normal);
+			i++;
 		}
 	}
 }
