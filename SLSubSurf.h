@@ -110,8 +110,12 @@ void SL_giveSubEdgeInFace(SLSubSurf *ss, SLFace *face,  MEdge *medges);
 SLSubSurf* SL_SubSurf_new(int smoothing);
 void SL_SubSurf_free(SLSubSurf *ss);
 
-void SL_SubSurf_syncVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
-void SL_SubSurf_syncEdge(SLSubSurf *ss, void* hashkey, void *vertkey0, void *vertkey1, float sharpness);
-void SL_SubSurf_syncFace(SLSubSurf *ss, void* hashkey, int numVerts, void **vertkeys);
+void SL_SubSurf_addVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
+void SL_SubSurf_addEdge(SLSubSurf *ss, void* hashkey, void *vertkey0, void *vertkey1, float sharpness);
+void SL_SubSurf_addFace(SLSubSurf *ss, void* hashkey, int numVerts, void **vertkeys);
+// Updates coordinate or sharpness in existing vert/edge
+void SL_SubSurf_updateVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
+void SL_SubSurf_updateEdge(SLSubSurf *ss, void* hashkey, float sharpness);
+
 
 void SL_SubSurf_processSync(SLSubSurf *ss);

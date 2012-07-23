@@ -89,7 +89,7 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
 
 /////////////////////////////////////////////////////////////
 
-// Sets all newIdx;
+// Sets all (new) indices necessary for copying stuff back into DerivedMesh
 void SL_renumberAll(SLSubSurf *ss)
 {
 	int idxA, idxB = 0;
@@ -113,6 +113,8 @@ void SL_renumberAll(SLSubSurf *ss)
 	}
 }
 
+// Function increases the loopCount and polyCount and continuously writes to mloops and mpolys
+// with all the subpolys in "face" (basically for copying data back to DerivedMesh)
 void SL_giveSubLoopInFace(SLSubSurf *ss, SLFace *face, int *loopCount, int *polyCount, MLoop *mloops, MPoly *mpolys)
 {
 	int j, prevJ, subEdgeNext, subEdgePrev;
@@ -293,84 +295,79 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 /////////////////////////////////////////////////////////////
 // Note! Must be added as verts, then edges, then faces and removed in the opposite order
 
-void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
-	SLVert *vert;
-	if ( (vert = BLI_ghash_lookup(ss->verts, hashkey)) == NULL ) { // Then new vert
-		vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
-		copy_v3_v3(vert->coords, coords);
-		vert->edges = NULL;
-		vert->faces = NULL;
-		vert->numFaces = 0;
-		vert->numEdges = 0;
-		vert->seam = seam;
-		// Add to hashmap
-		BLI_ghash_insert(ss->verts, hashkey, vert);
-		ss->numVerts++;
-	} else {
-		// Then existing vert has moved (TODO: Should I split this function?)
-		int i;
-		LinkNode *it;
-		copy_v3_v3(vert->coords, coords);
-		vert->seam = seam;
-		// Connected edges and faces need to updated
-		FOR_LIST(it, vert->faces) {
-			SLFace *face = (SLFace*)it->link;
-			face->requiresUpdate = 1;
-			// Also effects all edges on the connected face (since the center point moves)
-			for (i = 0; i < face->numVerts; i++) {
-				face->edges[i]->requiresUpdate = 1;
-				face->verts[i]->requiresUpdate = 1;
-			}
-		}
+void SL_SubSurf_addVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
+	SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
+	copy_v3_v3(vert->coords, coords);
+	vert->edges = NULL;
+	vert->faces = NULL;
+	vert->numFaces = 0;
+	vert->numEdges = 0;
+	vert->seam = seam;
+	// Add to hashmap
+	BLI_ghash_insert(ss->verts, hashkey, vert);
+	ss->numVerts++;
+	vert->requiresUpdate = 1;
+}
 
+void SL_SubSurf_updateVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
+	int i;
+	LinkNode *it;
+	SLVert *vert = BLI_ghash_lookup(ss->verts, hashkey);
+	BLI_assert(vert != NULL);
+	copy_v3_v3(vert->coords, coords);
+	vert->seam = seam;
+	// Connected edges and faces need to updated
+	FOR_LIST(it, vert->faces) {
+		SLFace *face = (SLFace*)it->link;
+		face->requiresUpdate = 1;
+		// Also effects all edges on the connected face (since the center point moves)
+		for (i = 0; i < face->numVerts; i++) {
+			face->edges[i]->requiresUpdate = 1;
+			face->verts[i]->requiresUpdate = 1;
+		}
 	}
 	vert->requiresUpdate = 1;
 }
 
 // Must be called after syncVert
-void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float sharpness) {
-	SLEdge *edge;
+void SL_SubSurf_addEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float sharpness) {
+	SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
 
-	if ( (edge = BLI_ghash_lookup(ss->edges, hashkey)) == NULL ) {
-		// Then new edge
-		edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
+	edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
+	edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
+	edge->faces = NULL;
+	edge->numFaces = 0;
+	edge->sharpness = sharpness;
+	edge->requiresUpdate = 1;
 
-		edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
-		edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
-		edge->faces = NULL;
-		edge->numFaces = 0;
-		edge->sharpness = sharpness;
-		edge->requiresUpdate = 1;
+	_vertAddEdge(ss, edge->v0, edge);
+	_vertAddEdge(ss, edge->v1, edge);
 
-		_vertAddEdge(ss, edge->v0, edge);
-		_vertAddEdge(ss, edge->v1, edge);
-
-		// Add to hashmap
-		BLI_ghash_insert(ss->edges, hashkey, edge);
-	} else {
-		// This means that sharpness has changed (v0 and v1 aren't allowed to change, that would indicate a *new* edge)
-		LinkNode *it;
-		edge->sharpness = sharpness;
-		// Affects the directly connected faces and verts
-		edge->v0->requiresUpdate = 1;
-		edge->v1->requiresUpdate = 1;
-		FOR_LIST(it, edge->faces) {
-			((SLFace*)it->link)->requiresUpdate = 1;
-		}
-	}
+	// Add to hashmap
+	BLI_ghash_insert(ss->edges, hashkey, edge);
 	ss->numEdges++;
 }
 
+void SL_SubSurf_updateEdge(SLSubSurf *ss, void *hashkey, float sharpness) {
+	LinkNode *it;
+	SLEdge *edge = BLI_ghash_lookup(ss->edges, hashkey);
+	BLI_assert(edge != NULL);
+	// This means that sharpness has changed (v0 and v1 aren't allowed to change, that would indicate a *new* edge)
+	edge->sharpness = sharpness;
+	// Affects the directly connected faces and verts
+	edge->v0->requiresUpdate = 1;
+	edge->v1->requiresUpdate = 1;
+	FOR_LIST(it, edge->faces) {
+		((SLFace*)it->link)->requiresUpdate = 1;
+	}
+}
+
 // Must be called after syncEdge
-void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
+void SL_SubSurf_addFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
 	int i;
 	SLEdge *edge;
 	SLVert *vert, *nextVert;
 	SLFace *face;
-
-	if ( BLI_ghash_lookup(ss->faces, hashkey) != NULL ) {
-		return; // Nothing can change be updated for existing faces.
-	}
 
 	// New face? Then;
 	face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
