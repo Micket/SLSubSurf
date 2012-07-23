@@ -18,6 +18,10 @@
 #include "BLI_ghash.h"
 #include "BLI_memarena.h"
 
+typedef struct MLoop MLoop;
+typedef struct MEdge MEdge;
+typedef struct MPoly MPoly;
+
 typedef struct SLSubSurf SLSubSurf;
 typedef struct SLFace SLFace;
 typedef struct SLEdge SLEdge;
@@ -31,7 +35,8 @@ typedef struct SLVert SLVert;
 
 
 struct SLVert {
-    int hashkey;
+	int newVertIdx; // Not sure if necessary (numbering is predictable)
+
     float coords[3]; // Initial coordinate
 
     LinkNode *edges;
@@ -45,7 +50,8 @@ struct SLVert {
 };
 
 struct SLEdge {
-    int hashkey;
+	// Meta-index. Starts from 0 for the first edge, which contains the first 2 subedges.
+	int newMetaIdx; // Not sure if necessary (numbering is predictable)
 
     SLVert *v0, *v1;
     LinkNode *faces;
@@ -61,10 +67,12 @@ struct SLEdge {
 };
 
 struct SLFace {
-    int hashkey;
+	// New indices are given for original verts, edge nodes, then face nodes (some faces have no new node)
+    int newVertIdx; // (unused for triangles)
+	int newEdgeStartIdx;
 
-    LinkNode *verts;
-    LinkNode *edges;
+    SLVert **verts;
+    SLEdge **edges;
     unsigned short numVerts; // note: numVerts same as numEdges
     unsigned short requiresUpdate;
 
@@ -76,7 +84,7 @@ struct SLSubSurf {
 
     int smoothing; // Boolean, nonzero for smoothing.
 
- 	GHash *verts, *edges, *faces;
+    GHash *verts, *edges, *faces;
  	GHashIterator *it;
 
     int numVerts;
@@ -94,6 +102,10 @@ int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss);
 
+// Methods for obtaining the loops and edges internal to the face. Uses the newIdx variables for numbering.
+// Sufficient memory should be allocated by caller. Returns number of loops for sub face (will always be 3 or 4)
+void SL_giveSubLoopInFace(SLSubSurf *ss, SLFace *face, int *loopCount, int *polyCount, MLoop *mloops, MPoly *mpolys);
+void SL_giveSubEdgeInFace(SLSubSurf *ss, SLFace *face,  MEdge *medges);
 
 SLSubSurf* SL_SubSurf_new(int smoothing);
 void SL_SubSurf_free(SLSubSurf *ss);

@@ -18,6 +18,7 @@
 #include "stdlib.h"
 #include "MEM_guardedalloc.h"
 #include "BLI_math_vector.h"
+#include "DNA_meshdata_types.h"
 
 // Convenient macro for looping through linked lists (which is done a lot)
 #define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
@@ -88,6 +89,141 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
 
 /////////////////////////////////////////////////////////////
 
+// Sets all newIdx;
+void SL_renumberAll(SLSubSurf *ss)
+{
+	int idxA, idxB = 0;
+
+	FOR_HASH(ss->it, ss->verts) {
+		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
+		vert->newVertIdx = idxA++;
+	}
+	FOR_HASH(ss->it, ss->edges) {
+		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
+		edge->newMetaIdx = idxB++;
+	}
+	idxA += idxB;
+	idxB *= 2;
+	FOR_HASH(ss->it, ss->faces) {
+		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		if (face->numVerts > 3)
+			face->newVertIdx = idxA++;
+		face->newEdgeStartIdx = idxB;
+		idxB += face->numVerts;
+	}
+}
+
+void SL_giveSubLoopInFace(SLSubSurf *ss, SLFace *face, int *loopCount, int *polyCount, MLoop *mloops, MPoly *mpolys)
+{
+	int j, prevJ, subEdgeNext, subEdgePrev;
+	SLVert *vert;
+	SLEdge *eNext, *ePrev;
+
+	if (face->numVerts == 3) {
+		// First the corner triangles
+		for (j = 0; j < 3; j++) {
+			prevJ = (j + 2) % 3;
+			eNext = face->edges[j];
+			ePrev = face->edges[prevJ];
+			vert = face->verts[j];
+
+			// Check ordering of edge (to determine which sub-edge should be used)
+			subEdgeNext = eNext->v0 != vert;
+			subEdgePrev = ePrev->v0 != vert;
+
+			// TODO: Other data, such as material number? (why is that part of the poly!?)
+			// For now, expect it to be filled by caller.
+			mpolys[*polyCount].loopstart = *loopCount;
+			mpolys[*polyCount].totloop = 3;
+			*polyCount += 1;
+			// Corner to next edge;
+			mloops[*loopCount+0].v = vert->newVertIdx;
+			mloops[*loopCount+0].e = eNext->newMetaIdx*2 + subEdgeNext;
+			// next edge node to internal edge j;
+			mloops[*loopCount+1].v = eNext->newMetaIdx + ss->numVerts;
+			mloops[*loopCount+1].e = face->newEdgeStartIdx + j;
+			// previous edge node to previous edge;
+			mloops[*loopCount+2].v = ePrev->newMetaIdx + ss->numVerts;
+			mloops[*loopCount+2].e = ePrev->newMetaIdx*2 + subEdgePrev;
+			loopCount += 3;
+		}
+
+		// Last poly is the center polygon, only internal edges and edge nodes
+		mpolys[*polyCount+3].loopstart = *loopCount;
+		mpolys[*polyCount+3].totloop = 3;
+		*polyCount += 1;
+		mloops[*loopCount+0].v = face->edges[2]->newMetaIdx + ss->numVerts;
+		mloops[*loopCount+0].e = face->newEdgeStartIdx;
+		mloops[*loopCount+1].v = face->edges[0]->newMetaIdx + ss->numVerts;
+		mloops[*loopCount+1].e = face->newEdgeStartIdx+1;
+		mloops[*loopCount+2].v = face->edges[1]->newMetaIdx + ss->numVerts;
+		mloops[*loopCount+2].e = face->newEdgeStartIdx+2;
+		*loopCount += 3;
+	} else {
+		for (j = 0; j < face->numVerts; j++) { // Loop over each sub-quad;
+			// Unsure if i negative values work, adding numVerts just in case.
+			prevJ = (j - 1 + face->numVerts) % face->numVerts;
+			eNext = face->edges[j];
+			ePrev = face->edges[prevJ];
+			vert = face->verts[j];
+
+			// Check ordering of edge (to determine which sub-edge should be used)
+			subEdgeNext = eNext->v0 != vert;
+			subEdgePrev = ePrev->v0 != vert;
+
+			mpolys[*polyCount].loopstart = *loopCount;
+			mpolys[*polyCount].totloop = 4;
+			*polyCount += 1;
+			// Starting from the corner node
+			mloops[*loopCount+0].v = vert->newVertIdx;
+			mloops[*loopCount+0].e = eNext->newMetaIdx*2 + subEdgeNext;
+			// go to next edge
+			mloops[*loopCount+1].v = eNext->newMetaIdx + ss->numVerts;
+			mloops[*loopCount+1].e = face->newEdgeStartIdx + j;
+			// then to midpoint
+			mloops[*loopCount+2].v = vert->newVertIdx;
+			mloops[*loopCount+2].e = face->newEdgeStartIdx + prevJ;
+			// then to previous edge,
+			mloops[*loopCount+3].v = ePrev->newMetaIdx + ss->numVerts;
+			mloops[*loopCount+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
+			*loopCount += 4;
+		}
+	}
+}
+
+void SL_giveSubEdgeInFace(SLSubSurf *ss, SLFace *face,  MEdge *medges)
+{
+	/* For triangles;
+    (0)
+	 |\
+	 | \
+	 |  \ e0
+  e2 |_0_\
+	 |\  |\
+	 |2\ |1\
+  (2)|__\|__\ (1)
+       e1
+
+	And ngons, the natural ordering is used
+	*/
+	if (face->numVerts == 3) {
+		medges[0].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
+		medges[0].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
+		medges[1].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
+		medges[1].v2 = ss->numVerts + face->edges[1]->newMetaIdx;
+		medges[2].v1 = ss->numVerts + face->edges[1]->newMetaIdx;
+		medges[2].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
+	} else {
+		int i;
+		for (i = 0; i < face->numVerts; i++) {
+			medges[i].v1 = ss->numVerts + face->edges[i]->newMetaIdx;
+			medges[i].v2 = face->newVertIdx;
+		}
+	}
+}
+
+/////////////////////////////////////////////////////////////
+
 void _nofreefp(void *x) {
 	// Nothing to free, its just the pointer, or freed elsewhere
 }
@@ -102,12 +238,6 @@ static void _valfreeEdge(void *val) {
 	SLEdge *edge = (SLEdge*)val;
 	BLI_linklist_free(edge->faces, NULL);
 }
-static void _valfreeFace(void *val) {
-	SLFace *face = (SLFace*)val;
-	BLI_linklist_free(face->verts, NULL);
-	BLI_linklist_free(face->edges, NULL);
-}
-
 
 SLSubSurf* SL_SubSurf_new(int smoothing) {
 	MemArena *ma = BLI_memarena_new((1<<16), "SL subsurf");
@@ -129,7 +259,7 @@ void SL_SubSurf_free(SLSubSurf *ss) {
 
 	BLI_ghash_free(ss->verts, _nofreefp, _valfreeVert);
 	BLI_ghash_free(ss->edges, _nofreefp, _valfreeEdge);
-	BLI_ghash_free(ss->faces, _nofreefp, _valfreeFace);
+	BLI_ghash_free(ss->faces, _nofreefp, _nofreefp);
 
 	BLI_memarena_free(ss->memArena);
 }
@@ -161,12 +291,12 @@ void BLI_linklist_remove(LinkNode **list, void *item) {
 }
 
 
-static void _vertAddFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
+static void _vertAddFace(SLVert *v, SLFace *f) {
 	BLI_linklist_prepend(&v->faces, f);
 	v->requiresUpdate = 1;
 	v->numFaces++;
 }
-static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
+static void _vertRemoveFace(SLVert *v, SLFace *f) {
 	BLI_linklist_remove(&v->faces, f);
 	v->requiresUpdate = 1;
 	v->numFaces--;
@@ -174,13 +304,13 @@ static void _vertRemoveFace(SLVert *v, SLFace *f, SLSubSurf *ss) {
 
 /////
 
-static void _vertAddEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
+static void _vertAddEdge(SLVert *v, SLEdge *e) {
 	BLI_linklist_prepend(&v->edges, e);
 	v->requiresUpdate = 1;
 	v->numEdges++;
 }
 
-static void _vertRemoveEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
+static void _vertRemoveEdge(SLVert *v, SLEdge *e) {
 	BLI_linklist_remove(&v->edges, e);
 	v->requiresUpdate = 1;
 	v->numEdges--;
@@ -188,12 +318,12 @@ static void _vertRemoveEdge(SLVert *v, SLEdge *e, SLSubSurf *ss) {
 
 /////
 
-static void _edgeAddFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
+static void _edgeAddFace(SLEdge *e, SLFace *f) {
 	BLI_linklist_prepend(&e->faces, f);
 	e->requiresUpdate = 1;
 	e->numFaces++;
 }
-static void _edgeRemoveFace(SLEdge *e, SLFace *f, SLSubSurf *ss) {
+static void _edgeRemoveFace(SLEdge *e, SLFace *f) {
 	BLI_linklist_remove(&e->faces, f);
 	e->requiresUpdate = 1;
 	e->numFaces--;
@@ -232,20 +362,18 @@ void SL_SubSurf_syncVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam
 		ss->numVerts++;
 	} else {
 		// Then existing vert has moved (TODO: Should I split this function?)
+		int i;
 		LinkNode *it;
 		copy_v3_v3(vert->coords, coords);
 		vert->seam = seam;
 		// Connected edges and faces need to updated
 		FOR_LIST(it, vert->faces) {
-			LinkNode *it2;
 			SLFace *face = (SLFace*)it->link;
 			face->requiresUpdate = 1;
 			// Also effects all edges on the connected face (since the center point moves)
-			FOR_LIST(it2, face->edges) {
-				((SLEdge*)it->link)->requiresUpdate = 1;
-			}
-			FOR_LIST(it2, face->verts) {
-				((SLVert*)it->link)->requiresUpdate = 1;
+			for (i = 0; i < face->numVerts; i++) {
+				face->edges[i]->requiresUpdate = 1;
+				face->verts[i]->requiresUpdate = 1;
 			}
 		}
 
@@ -268,8 +396,8 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 		edge->sharpness = sharpness;
 		edge->requiresUpdate = 1;
 
-		_vertAddEdge(edge->v0, edge, ss);
-		_vertAddEdge(edge->v1, edge, ss);
+		_vertAddEdge(edge->v0, edge);
+		_vertAddEdge(edge->v1, edge);
 
 		// Add to hashmap
 		BLI_ghash_insert(ss->edges, hashkey, edge);
@@ -300,22 +428,22 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vert
 
 	// New face? Then;
 	face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
-	// Static lists for faces maybe?
-	//face->verts = (SLVert**)MEM_allocN(sizeof(SLVert*)*numVerts);
-	//face->edges = (SLEdge**)MEM_allocN(sizeof(SLEdge*)*numVerts);
+	// Static lists for faces (more convenient, predictable size)
+	face->verts = BLI_memarena_alloc(ss->memArena, sizeof(SLVert*)*numVerts);
+	face->edges = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge*)*numVerts);
 
 	face->numVerts = numVerts;
 	face->requiresUpdate = 1;
 	for (i = 0; i < numVerts; i++) {
 		// Verts
 		vert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[i]);
-		BLI_linklist_prepend(&face->verts, vert);
-		_vertAddFace(vert, face, ss);
+		face->verts[i] = vert;
+		_vertAddFace(vert, face);
 		// Then edges
 		nextVert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[(i+1) % numVerts]);
 		edge = _sharedEdge(vert, nextVert);
-		BLI_linklist_prepend(&face->edges, edge);
-		_edgeAddFace(edge, face, ss);
+		face->edges[i] = edge;
+		_edgeAddFace(edge, face);
 	}
 
 	// Add to hashmap
@@ -335,8 +463,8 @@ void SL_SubSurf_syncVertDel(SLSubSurf *ss, void *hashkey) {
 void SL_SubSurf_syncEdgeDel(SLSubSurf *ss, void *hashkey) {
 	// Disconnect edge;
 	SLEdge *edge = (SLEdge*)BLI_ghash_lookup(ss->edges, hashkey);
-	_vertRemoveEdge(edge->v0, edge, ss);
-	_vertRemoveEdge(edge->v1, edge, ss);
+	_vertRemoveEdge(edge->v0, edge);
+	_vertRemoveEdge(edge->v1, edge);
 	// then delete it
 	BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeEdge);
 	ss->numEdges--;
@@ -344,14 +472,14 @@ void SL_SubSurf_syncEdgeDel(SLSubSurf *ss, void *hashkey) {
 
 void SL_SubSurf_syncFaceDel(SLSubSurf *ss, void *hashkey) {
 	// Disconnect face;
-	LinkNode *itVert, *itEdge;
+	int i;
 	SLFace *face = (SLFace*)BLI_ghash_lookup(ss->edges, hashkey);
-	for (itVert = face->verts, itEdge = face->edges; itVert != NULL; itVert = itVert->next, itEdge = itEdge->next) {
-		_vertRemoveFace((SLVert*)itVert->link, face, ss);
-		_edgeRemoveFace((SLEdge*)itEdge->link, face, ss);
+	for (i = 0; i < face->numVerts; i++) {
+		_vertRemoveFace(face->verts[i], face);
+		_edgeRemoveFace(face->edges[i], face);
 	}
 	// then delete it
-	BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeFace);
+	BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _nofreefp);
 	ss->numFaces--;
 }
 
@@ -363,6 +491,7 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 	SLEdge *edge;
 	SLVert *vert;
 	LinkNode *it;
+	int i;
 	float avgSharpness;
 	int seamCount, sharpnessCount;
 	int seam;
@@ -375,8 +504,8 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 
 		zero_v3(face->centroid);
 
-		FOR_LIST(it, face->verts) {
-			add_v3_v3(face->centroid, ((SLVert*)it->link)->coords);
+		for (i = 0; i < face->numVerts; i++) {
+			add_v3_v3(face->centroid, face->verts[i]->coords);
 		}
 		mul_v3_fl(face->centroid, 1.0f / face->numVerts );
 	}
@@ -514,24 +643,22 @@ void SL_SubSurf_processSync(SLSubSurf *ss) {
 			FOR_LIST(it, edge->faces) {
 				face = (SLFace*)it->link;
 				if (face->numVerts == 3) {
-					LinkNode *it2;
 					// Triangles are split differently from the rest;
 					// There are connections to the center nodes of the two opposite edges
-					FOR_LIST(it2, face->edges) {
-						SLEdge *tempEdge = (SLEdge*)it2->link;
+					for (i = 0; i < face->numVerts; i++) {
+						SLEdge *tempEdge = face->edges[i];
 						if ( tempEdge != edge ) { // Then opposite edge
 							madd_v3_v3fl(edge->sl_coords, tempEdge->centroid, 2);
 						}
 					}
 					avgCount += 4; // 2 edges each
 				} else {
-					LinkNode *it2;
 					// Otherwise all ngons are split into quads, leaving one center node and edges
 					madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
 					avgCount += 2;
 					// Now find the other edges that share a node;
-					FOR_LIST(it2, face->edges) {
-						SLEdge *tempEdge = (SLEdge*)it2->link;
+					for (i = 0; i < face->numVerts; i++) {
+						SLEdge *tempEdge = face->edges[i];
 						if ( tempEdge != edge ) {
 							// Check for a shared node;
 							if ( tempEdge->v0 == edge->v0 ||
