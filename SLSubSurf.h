@@ -29,8 +29,8 @@ typedef struct SLVert SLVert;
 
 /**
  * \file LSSurf.h
-   This code is meant to implement a basic Stam/Loop subdivision surface
- * \note The code is intentionally written to avoid recursion. Complicates/limits some things.
+ * This code implements a basic Stam/Loop subdivision surface
+ * Only subdivides 1 level!
  */
 
 
