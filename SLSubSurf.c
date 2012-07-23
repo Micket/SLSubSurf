@@ -295,7 +295,7 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 /////////////////////////////////////////////////////////////
 // Note! Must be added as verts, then edges, then faces and removed in the opposite order
 
-void SL_SubSurf_addVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
+void SL_addVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
 	SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
 	copy_v3_v3(vert->coords, coords);
 	vert->edges = NULL;
@@ -309,7 +309,7 @@ void SL_SubSurf_addVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam)
 	vert->requiresUpdate = 1;
 }
 
-void SL_SubSurf_updateVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
+void SL_updateVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
 	int i;
 	LinkNode *it;
 	SLVert *vert = BLI_ghash_lookup(ss->verts, hashkey);
@@ -330,7 +330,7 @@ void SL_SubSurf_updateVert(SLSubSurf *ss, void *hashkey, float coords[3], int se
 }
 
 // Must be called after syncVert
-void SL_SubSurf_addEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float sharpness) {
+void SL_addEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float sharpness) {
 	SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
 
 	edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
@@ -348,7 +348,7 @@ void SL_SubSurf_addEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vert
 	ss->numEdges++;
 }
 
-void SL_SubSurf_updateEdge(SLSubSurf *ss, void *hashkey, float sharpness) {
+void SL_updateEdge(SLSubSurf *ss, void *hashkey, float sharpness) {
 	LinkNode *it;
 	SLEdge *edge = BLI_ghash_lookup(ss->edges, hashkey);
 	BLI_assert(edge != NULL);
@@ -363,7 +363,7 @@ void SL_SubSurf_updateEdge(SLSubSurf *ss, void *hashkey, float sharpness) {
 }
 
 // Must be called after syncEdge
-void SL_SubSurf_addFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
+void SL_addFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
 	int i;
 	SLEdge *edge;
 	SLVert *vert, *nextVert;
@@ -397,7 +397,7 @@ void SL_SubSurf_addFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertk
 /////////////////////////////////////////////////////////////
 // Actual smoothing stuff
 
-void SL_SubSurf_processSync(SLSubSurf *ss) {
+void SL_processSync(SLSubSurf *ss) {
 	SLFace *face;
 	SLEdge *edge;
 	SLVert *vert;
