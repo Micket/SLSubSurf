@@ -228,17 +228,6 @@ void _nofreefp(void *x) {
 	// Nothing to free, its just the pointer, or freed elsewhere
 }
 
-// These free the memory allocated the the linknode itself, not the link, which is allocated/freed by the memory arena
-static void _valfreeVert(void *val) {
-	SLVert *vert = (SLVert*)val;
-	BLI_linklist_free(vert->edges, NULL);
-	BLI_linklist_free(vert->faces, NULL);
-}
-static void _valfreeEdge(void *val) {
-	SLEdge *edge = (SLEdge*)val;
-	BLI_linklist_free(edge->faces, NULL);
-}
-
 SLSubSurf* SL_SubSurf_new(int smoothing) {
 	MemArena *ma = BLI_memarena_new((1<<16), "SL subsurf");
 	SLSubSurf *ss = (SLSubSurf*)BLI_memarena_alloc(ma, sizeof(SLSubSurf));
@@ -257,8 +246,8 @@ SLSubSurf* SL_SubSurf_new(int smoothing) {
 void SL_SubSurf_free(SLSubSurf *ss) {
 	BLI_ghashIterator_free(ss->it);
 
-	BLI_ghash_free(ss->verts, _nofreefp, _valfreeVert);
-	BLI_ghash_free(ss->edges, _nofreefp, _valfreeEdge);
+	BLI_ghash_free(ss->verts, _nofreefp, _nofreefp);
+	BLI_ghash_free(ss->edges, _nofreefp, _nofreefp);
 	BLI_ghash_free(ss->faces, _nofreefp, _nofreefp);
 
 	BLI_memarena_free(ss->memArena);
@@ -268,65 +257,22 @@ void SL_SubSurf_free(SLSubSurf *ss) {
 // Helpers for connecting & disconnecting edges-verts-faces
 // Using linked lists here;
 
-// Missing from BLI_linklist;
-void BLI_linklist_remove(LinkNode **list, void *item) {
-	if ((*list)->link == item) { // First entry should be removed
-		// Called should free the item, we'll just stop the node;
-		LinkNode *tmp = (*list)->next;
-		MEM_freeN(*list);
-		*list = tmp;
-		return;
-	} else {
-		LinkNode *prev = *list;
-		LinkNode *node = prev->next;
-		while (node != NULL) {
-			if (node->link == item) {
-				prev->next = node->next; // Connect the previous node
-				MEM_freeN(*list);
-			}
-			prev = node;
-			node = node->next;
-		}
-	}
-}
-
-
-static void _vertAddFace(SLVert *v, SLFace *f) {
-	BLI_linklist_prepend(&v->faces, f);
+static void _vertAddFace(SLSubSurf *ss, SLVert *v, SLFace *f) {
+	BLI_linklist_prepend_arena(&v->faces, f, ss->memArena);
 	v->requiresUpdate = 1;
 	v->numFaces++;
 }
-static void _vertRemoveFace(SLVert *v, SLFace *f) {
-	BLI_linklist_remove(&v->faces, f);
-	v->requiresUpdate = 1;
-	v->numFaces--;
-}
 
-/////
-
-static void _vertAddEdge(SLVert *v, SLEdge *e) {
-	BLI_linklist_prepend(&v->edges, e);
+static void _vertAddEdge(SLSubSurf *ss, SLVert *v, SLEdge *e) {
+	BLI_linklist_prepend_arena(&v->edges, e, ss->memArena);
 	v->requiresUpdate = 1;
 	v->numEdges++;
 }
 
-static void _vertRemoveEdge(SLVert *v, SLEdge *e) {
-	BLI_linklist_remove(&v->edges, e);
-	v->requiresUpdate = 1;
-	v->numEdges--;
-}
-
-/////
-
-static void _edgeAddFace(SLEdge *e, SLFace *f) {
-	BLI_linklist_prepend(&e->faces, f);
+static void _edgeAddFace(SLSubSurf *ss, SLEdge *e, SLFace *f) {
+	BLI_linklist_prepend_arena(&e->faces, f, ss->memArena);
 	e->requiresUpdate = 1;
 	e->numFaces++;
-}
-static void _edgeRemoveFace(SLEdge *e, SLFace *f) {
-	BLI_linklist_remove(&e->faces, f);
-	e->requiresUpdate = 1;
-	e->numFaces--;
 }
 
 /////////////////////////////////////////////////////////////
@@ -396,8 +342,8 @@ void SL_SubSurf_syncEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *ver
 		edge->sharpness = sharpness;
 		edge->requiresUpdate = 1;
 
-		_vertAddEdge(edge->v0, edge);
-		_vertAddEdge(edge->v1, edge);
+		_vertAddEdge(ss, edge->v0, edge);
+		_vertAddEdge(ss, edge->v1, edge);
 
 		// Add to hashmap
 		BLI_ghash_insert(ss->edges, hashkey, edge);
@@ -438,49 +384,17 @@ void SL_SubSurf_syncFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vert
 		// Verts
 		vert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[i]);
 		face->verts[i] = vert;
-		_vertAddFace(vert, face);
+		_vertAddFace(ss, vert, face);
 		// Then edges
 		nextVert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[(i+1) % numVerts]);
 		edge = _sharedEdge(vert, nextVert);
 		face->edges[i] = edge;
-		_edgeAddFace(edge, face);
+		_edgeAddFace(ss, edge, face);
 	}
 
 	// Add to hashmap
 	BLI_ghash_insert(ss->faces, hashkey, face);
 	ss->numFaces++;
-}
-
-// And then deletion
-
-// Must be called after syncEdgeDel
-void SL_SubSurf_syncVertDel(SLSubSurf *ss, void *hashkey) {
-	BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeVert);
-	ss->numVerts--;
-}
-
-// Must be called after syncFaceDel!
-void SL_SubSurf_syncEdgeDel(SLSubSurf *ss, void *hashkey) {
-	// Disconnect edge;
-	SLEdge *edge = (SLEdge*)BLI_ghash_lookup(ss->edges, hashkey);
-	_vertRemoveEdge(edge->v0, edge);
-	_vertRemoveEdge(edge->v1, edge);
-	// then delete it
-	BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _valfreeEdge);
-	ss->numEdges--;
-}
-
-void SL_SubSurf_syncFaceDel(SLSubSurf *ss, void *hashkey) {
-	// Disconnect face;
-	int i;
-	SLFace *face = (SLFace*)BLI_ghash_lookup(ss->edges, hashkey);
-	for (i = 0; i < face->numVerts; i++) {
-		_vertRemoveFace(face->verts[i], face);
-		_edgeRemoveFace(face->edges[i], face);
-	}
-	// then delete it
-	BLI_ghash_remove(ss->edges, hashkey, _nofreefp, _nofreefp);
-	ss->numFaces--;
 }
 
 /////////////////////////////////////////////////////////////
