@@ -360,13 +360,7 @@ void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]) {
 
 	FOR_HASH(ss->it, ss->verts) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
 		SLVert *vert = BLI_ghashIterator_getValue(ss->it);
-		if (first) {
-			copy_v3_v3(min_r, vert->coords);
-			copy_v3_v3(max_r, vert->coords);
-			first = 0;
-		} else {
-			minmax_v3_v3v3(vert->coords, min_r, max_r);
-		}
+		minmax_v3_v3v3(vert->coords, min_r, max_r);
 	}
 }
 
