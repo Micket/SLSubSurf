@@ -18,6 +18,7 @@ typedef struct MVert MVert;
 typedef struct MEdge MEdge;
 typedef struct MLoop MLoop;
 typedef struct MPoly MPoly;
+typedef struct MFace MFace;
 typedef struct DMFlagMat DMFlagMat;
 typedef struct MemArena MemArena;
 typedef struct GHash GHash;

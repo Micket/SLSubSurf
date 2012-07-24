@@ -219,7 +219,7 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
 
 void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 {
-	int i = 0, j, prevJ, subEdgeNext, subEdgePrev;
+	int i = 0, j, prevJ;
 	SLFace *face;
 	SLVert *vert;
 	SLEdge *eNext, *ePrev;
@@ -339,7 +339,7 @@ void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts)
 
 /////////////////////////////////////////////////////////////
 
-void _nofreefp(void *x) {
+void _nofreefp(void *UNUSED(x)) {
 	// Nothing to free, its just the pointer, or freed elsewhere
 }
 
