@@ -117,35 +117,6 @@ void SL_renumberAll(SLSubSurf *ss)
 	}
 }
 
-void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys)
-{
-	int i = 0, j, k;
-	FOR_HASH(ss->it, ss->faces) {
-		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		int flag = (faceFlags) ? faceFlags[i].flag : ME_SMOOTH;
-		int mat_nr = (faceFlags) ? faceFlags[i].mat_nr : 0;
-		if (face->numVerts == 3) {
-			for (j = 0; j < 3; j++) {
-				mpolys[i].loopstart = k;
-				mpolys[i].totloop = 3;
-				mpolys[i].mat_nr = mat_nr;
-				mpolys[i].flag = flag;
-				i += 1;
-				k += 3;
-			}
-		} else {
-			for (j = 0; j < face->numVerts; j++) {
-				mpolys[i].loopstart = k;
-				mpolys[i].totloop = 4;
-				mpolys[i].mat_nr = mat_nr;
-				mpolys[i].flag = flag;
-				i += 1;
-				k += 4;
-			}
-		}
-	}
-}
-
 void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
 {
 	int i = 0, j, prevJ, subEdgeNext, subEdgePrev;
@@ -217,15 +188,47 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
 	}
 }
 
-void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
+void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys)
+{
+	int i = 0, j, k;
+	FOR_HASH(ss->it, ss->faces) {
+		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		int flag = (faceFlags) ? faceFlags->flag : ME_SMOOTH;
+		int mat_nr = (faceFlags) ? faceFlags->mat_nr : 0;
+		faceFlags++;
+		if (face->numVerts == 3) {
+			for (j = 0; j < 3; j++) {
+				mpolys[i].loopstart = k;
+				mpolys[i].totloop = 3;
+				mpolys[i].mat_nr = mat_nr;
+				mpolys[i].flag = flag;
+				i += 1;
+				k += 3;
+			}
+		} else {
+			for (j = 0; j < face->numVerts; j++) {
+				mpolys[i].loopstart = k;
+				mpolys[i].totloop = 4;
+				mpolys[i].mat_nr = mat_nr;
+				mpolys[i].flag = flag;
+				i += 1;
+				k += 4;
+			}
+		}
+	}
+}
+
+void SL_copyNewTessFaces(SLSubSurf *ss, DMFlagMat *faceFlags, MFace *mfaces)
 {
 	int i = 0, j, prevJ;
-	SLFace *face;
 	SLVert *vert;
 	SLEdge *eNext, *ePrev;
 
 	FOR_HASH(ss->it, ss->faces) {
-		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+		int flag = (faceFlags) ? faceFlags->flag : ME_SMOOTH;
+		int mat_nr = (faceFlags) ? faceFlags->mat_nr : 0;
+		faceFlags++;
 		if (face->numVerts == 3) {
 			// First the corner triangles
 			for (j = 0; j < 3; j++) {
@@ -238,6 +241,8 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
 				mfaces[i].v3 = ePrev->newMetaIdx + ss->numVerts;
 				mfaces[i].v4 = -1;
+				mfaces[i].mat_nr = mat_nr;
+				mfaces[i].flag = flag;
 				i += 1;
 			}
 
@@ -259,6 +264,8 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
 				mfaces[i].v3 = vert->newVertIdx;
 				mfaces[i].v4 = ePrev->newMetaIdx + ss->numVerts;
+				mfaces[i].mat_nr = mat_nr;
+				mfaces[i].flag = flag;
 				i += 1;
 			}
 		}
