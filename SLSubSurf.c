@@ -329,7 +329,7 @@ void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts) {
 		//normal_float_to_short_v3(mverts[i].no, edge->normal);
 		i++;
 	}
-	FOR_HASH(ss->it, ss->edges) {
+	FOR_HASH(ss->it, ss->faces) {
 		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
 		if (face->numVerts > 3) {
 			copy_v3_v3(mverts[i].co, face->centroid);
@@ -337,6 +337,7 @@ void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts) {
 			i++;
 		}
 	}
+	printf("Wrote %d verts!\n", i);
 }
 
 static void minmax_v3_v3v3(const float vec[3], float min[3], float max[3])
@@ -556,7 +557,8 @@ void SL_processSync(SLSubSurf *ss) {
 	printf("Computing face centroids\n");
 	FOR_HASH(ss->it, ss->faces) {
 		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		if (face->requiresUpdate) continue;
+		if (!face->requiresUpdate) continue;
+		face->requiresUpdate = 0; // (do this here, since face center node isn't smoothed)
 
 		zero_v3(face->centroid);
 
@@ -575,12 +577,16 @@ void SL_processSync(SLSubSurf *ss) {
 			edge->centroid[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
 	}
 
-	printf("Computing vert smoothing\n");
+	printf("Computing vert smoothing (smooth %s)\n", ss->smoothing ? "on":"off");
 	// Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
 	FOR_HASH(ss->it, ss->verts) {
 		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		if (!vert->requiresUpdate) continue;
-		if (!ss->smoothing) copy_v3_v3(vert->sl_coords, vert->coords);
+		vert->requiresUpdate = 0;
+		if (!ss->smoothing) {
+			copy_v3_v3(vert->sl_coords, vert->coords);
+			continue;
+		}
 
 		// Compute average sharpness and seam;
 		seamCount = 0;
@@ -682,7 +688,7 @@ void SL_processSync(SLSubSurf *ss) {
 	FOR_HASH(ss->it, ss->edges) {
 		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
 		if (!edge->requiresUpdate) continue;
-
+		edge->requiresUpdate = 0;
 		// Create the interpolated coordinates
 		if (!ss->smoothing || edge->numFaces < 2 || edge->sharpness >= 1.0f) { // If its an edge, or maximum sharpness, then just average.
 			copy_v3_v3(edge->sl_coords, edge->centroid);
