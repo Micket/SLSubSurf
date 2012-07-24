@@ -94,8 +94,7 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
 /////////////////////////////////////////////////////////////
 
 // Sets all (new) indices necessary for copying stuff back into DerivedMesh
-void SL_renumberAll(SLSubSurf *ss)
-{
+void SL_renumberAll(SLSubSurf *ss) {
 	int idxA, idxB = 0;
 
 	FOR_HASH(ss->it, ss->verts) {
@@ -117,8 +116,7 @@ void SL_renumberAll(SLSubSurf *ss)
 	}
 }
 
-void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
-{
+void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 	int i = 0, j, prevJ, subEdgeNext, subEdgePrev;
 	SLFace *face;
 	SLVert *vert;
@@ -188,8 +186,7 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops)
 	}
 }
 
-void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys)
-{
+void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys) {
 	int i = 0, j, k;
 	FOR_HASH(ss->it, ss->faces) {
 		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
@@ -272,8 +269,7 @@ void SL_copyNewTessFaces(SLSubSurf *ss, DMFlagMat *faceFlags, MFace *mfaces)
 	}
 }
 
-void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges)
-{
+void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 	/* For triangles;
     (0)
 	 |\
@@ -319,8 +315,7 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges)
 	}
 }
 
-void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts)
-{
+void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts) {
 	int i = 0;
 	FOR_HASH(ss->it, ss->verts) {
 		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
@@ -340,6 +335,36 @@ void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts)
 			copy_v3_v3(mverts[i].co, face->centroid);
 			//normal_float_to_short_v3(mverts[i].no, face->normal);
 			i++;
+		}
+	}
+}
+
+static void minmax_v3_v3v3(const float vec[3], float min[3], float max[3])
+{
+	if (min[0] > vec[0]) min[0] = vec[0];
+	if (min[1] > vec[1]) min[1] = vec[1];
+	if (min[2] > vec[2]) min[2] = vec[2];
+	if (max[0] < vec[0]) max[0] = vec[0];
+	if (max[1] < vec[1]) max[1] = vec[1];
+	if (max[2] < vec[2]) max[2] = vec[2];
+}
+
+void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]) {
+	int first = 1;
+	if (ss->numVerts == 0) {
+		zero_v3(min_r);
+		zero_v3(max_r);
+		return;
+	}
+
+	FOR_HASH(ss->it, ss->verts) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
+		SLVert *vert = BLI_ghashIterator_getValue(ss->it);
+		if (first) {
+			copy_v3_v3(min_r, vert->coords);
+			copy_v3_v3(max_r, vert->coords);
+			first = 0;
+		} else {
+			minmax_v3_v3v3(vert->coords, min_r, max_r);
 		}
 	}
 }

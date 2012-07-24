@@ -123,6 +123,7 @@ void SL_addFace(SLSubSurf *ss, void* hashkey, int numVerts, void **vertkeys);
 void SL_updateVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
 void SL_updateEdge(SLSubSurf *ss, void* hashkey, float sharpness);
 
+void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]);
 
 void SL_processSync(SLSubSurf *ss);
 void SL_renumberAll(SLSubSurf *ss);
