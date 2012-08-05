@@ -180,6 +180,8 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 				// then to previous edge,
 				mloops[i+3].v = ePrev->newMetaIdx + ss->numVerts;
 				mloops[i+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
+				printf("loop verts = %d, %d, %d, %d\n", mloops[i+0].v,mloops[i+1].v,mloops[i+2].v,mloops[i+3].v);
+				printf("loop edges = %d, %d, %d, %d\n", mloops[i+0].e,mloops[i+1].e,mloops[i+2].e,mloops[i+3].e);
 				i += 4;
 			}
 		}
@@ -187,14 +189,14 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 }
 
 void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys) {
-	int i = 0, j, k;
+	int i = 0, j, k = 0;
 	FOR_HASH(ss->it, ss->faces) {
 		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
 		int flag = (faceFlags) ? faceFlags->flag : ME_SMOOTH;
 		int mat_nr = (faceFlags) ? faceFlags->mat_nr : 0;
 		faceFlags++;
 		if (face->numVerts == 3) {
-			for (j = 0; j < 3; j++) {
+			for (j = 0; j < 4; j++) { // note! 4 faces
 				mpolys[i].loopstart = k;
 				mpolys[i].totloop = 3;
 				mpolys[i].mat_nr = mat_nr;
@@ -237,7 +239,7 @@ void SL_copyNewTessFaces(SLSubSurf *ss, DMFlagMat *faceFlags, MFace *mfaces)
 				mfaces[i].v1 = vert->newVertIdx;
 				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
 				mfaces[i].v3 = ePrev->newMetaIdx + ss->numVerts;
-				mfaces[i].v4 = -1;
+				mfaces[i].v4 = 0;
 				mfaces[i].mat_nr = mat_nr;
 				mfaces[i].flag = flag;
 				i += 1;
@@ -288,9 +290,11 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 	FOR_HASH(ss->it, ss->edges) {
 		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
 		medges[i+0].v1 = edge->v0->newVertIdx;
-		medges[i+0].v2 = edge->newMetaIdx + ss->numVerts;
-		medges[i+1].v1 = edge->newMetaIdx + ss->numVerts;
-		medges[i+1].v2 = edge->v0->newVertIdx;
+		medges[i+0].v2 = ss->numVerts + edge->newMetaIdx;
+		medges[i+1].v1 = ss->numVerts + edge->newMetaIdx;
+		medges[i+1].v2 = edge->v1->newVertIdx;
+		printf("edge = %d, %d\n", medges[i+0].v1,medges[i+0].v2);
+		printf("edge = %d, %d\n", medges[i+1].v1,medges[i+1].v2);
 		i += 2;
 	}
 	// Then the faces
@@ -303,12 +307,16 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 			medges[i+1].v2 = ss->numVerts + face->edges[1]->newMetaIdx;
 			medges[i+2].v1 = ss->numVerts + face->edges[1]->newMetaIdx;
 			medges[i+2].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
+			printf("edge = %d, %d\n", medges[i+0].v1,medges[i+0].v2);
+			printf("edge = %d, %d\n", medges[i+1].v1,medges[i+1].v2);
+			printf("edge = %d, %d\n", medges[i+2].v1,medges[i+2].v2);
 			i += 3;
 		} else {
 			int j;
 			for (j = 0; j < face->numVerts; j++) {
 				medges[i].v1 = ss->numVerts + face->edges[j]->newMetaIdx;
 				medges[i].v2 = face->newVertIdx;
+				printf("edge = %d, %d\n", medges[i].v1,medges[i].v2);
 				i++;
 			}
 		}
@@ -351,7 +359,6 @@ static void minmax_v3_v3v3(const float vec[3], float min[3], float max[3])
 }
 
 void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]) {
-	int first = 1;
 	if (ss->numVerts == 0) {
 		zero_v3(min_r);
 		zero_v3(max_r);
@@ -616,9 +623,12 @@ void SL_processSync(SLSubSurf *ss) {
 
 			zero_v3(vert->sl_coords);
 
-			// Original coordinate, weight 4 (is this correct?)
-			madd_v3_v3fl(vert->sl_coords, vert->coords, 4);
-			avgCount = 4;
+			// Original coordinate, weight ????
+			madd_v3_v3fl(vert->sl_coords, vert->coords, 2);
+			avgCount = 2;
+			// Seems to match what CCG does (doesn't seem match the research article however) (ONLY FOR A SIMPLE CUBE)
+			//zero_v3(vert->sl_coords);
+			//avgCount = 0;
 
 			// Weights for edges are multiple of shared faces;
 			FOR_LIST(it, vert->edges) {
@@ -635,7 +645,6 @@ void SL_processSync(SLSubSurf *ss) {
 					avgCount++; // Note that the subdivided area is a quad for any ngon > 3
 				}
 			}
-
 			mul_v3_fl(vert->sl_coords, 1.0f / avgCount );
 		}
 
@@ -691,10 +700,13 @@ void SL_processSync(SLSubSurf *ss) {
 			// Now, this is a bit tricky to deal with ngons. Quads and tris only would be a lot simpler.
 			// Problem is to take into account edges appropriately.
 
-			copy_v3_v3(edge->sl_coords, edge->v0->coords);
-			add_v3_v3(edge->sl_coords, edge->v1->coords);
-			mul_v3_fl(edge->sl_coords, 2);
-			avgCount = 4;
+			// 2 times itself + 1 times itself for every connected face
+			copy_v3_v3(edge->sl_coords, edge->centroid);
+			mul_v3_fl(edge->sl_coords, 2 + 2*edge->numFaces);
+			avgCount = 2 + 2*edge->numFaces;
+			// By trail and error it seems this seems to look good + match what CCG does. (ONLY FOR CUBES THOUGH!)
+			//zero_v3(edge->sl_coords);
+			//avgCount = 0;
 
 			FOR_LIST(it, edge->faces) {
 				face = (SLFace*)it->link;
@@ -711,25 +723,25 @@ void SL_processSync(SLSubSurf *ss) {
 				} else {
 					// Otherwise all ngons are split into quads, leaving one center node and edges
 					madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
-					avgCount += 2;
 					// Now find the other edges that share a node;
 					for (i = 0; i < face->numVerts; i++) {
 						SLEdge *tempEdge = face->edges[i];
 						if ( tempEdge != edge ) {
 							// Check for a shared node;
-							if ( tempEdge->v0 == edge->v0 ||
-									tempEdge->v0 == edge->v1 ||
-									tempEdge->v1 == edge->v0 ||
-									tempEdge->v1 == edge->v1) {
+							if (tempEdge->v0 == edge->v0 ||
+								tempEdge->v0 == edge->v1 ||
+								tempEdge->v1 == edge->v0 ||
+								tempEdge->v1 == edge->v1) {
 								add_v3_v3(edge->sl_coords, tempEdge->centroid);
 							}
 						}
 					}
 					avgCount += 4; // 1x2 from centroid + 2x1 from edges
 				}
-				madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
 			}
-			mul_v3_fl(edge->sl_coords, 1.0f / (2.0f + edge->numFaces));
+			//printf("edge avgCount = %d\n", avgCount);
+			//printf("edge sl_coords (accumulated) = %e, %e, %e\n", edge->sl_coords[0], edge->sl_coords[1], edge->sl_coords[2]);
+			mul_v3_fl(edge->sl_coords, 1.0f / avgCount);
 
 			// And take into account sharpness
 			if (edge->sharpness > 0.0f ) {
