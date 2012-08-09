@@ -95,8 +95,9 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
 
 // Sets all (new) indices necessary for copying stuff back into DerivedMesh
 void SL_renumberAll(SLSubSurf *ss) {
-	int idxA, idxB = 0;
+	int idxA = 0, idxB = 0;
 
+	printf("Renumbering new subverts and subedges\n");
 	FOR_HASH(ss->it, ss->verts) {
 		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		vert->newVertIdx = idxA++;
@@ -180,9 +181,8 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 				// then to previous edge,
 				mloops[i+3].v = ePrev->newMetaIdx + ss->numVerts;
 				mloops[i+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
-				printf("loop verts = %d, %d, %d, %d\n", mloops[i+0].v,mloops[i+1].v,mloops[i+2].v,mloops[i+3].v);
-				printf("loop edges = %d, %d, %d, %d\n", mloops[i+0].e,mloops[i+1].e,mloops[i+2].e,mloops[i+3].e);
 				i += 4;
+				//printf("mloops.v = %e, %e, %e, %e\n", mloops[i+0].v, mloops[i+1].v, mloops[i+2].v, mloops[i+3].v);
 			}
 		}
 	}
@@ -293,8 +293,8 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 		medges[i+0].v2 = ss->numVerts + edge->newMetaIdx;
 		medges[i+1].v1 = ss->numVerts + edge->newMetaIdx;
 		medges[i+1].v2 = edge->v1->newVertIdx;
-		printf("edge = %d, %d\n", medges[i+0].v1,medges[i+0].v2);
-		printf("edge = %d, %d\n", medges[i+1].v1,medges[i+1].v2);
+		//printf("medges[%d] = {%d, %d}\n", i, medges[i+0].v1, medges[i+0].v2);
+		//printf("medges[%d] = {%d, %d}\n", i+1, medges[i+0].v1, medges[i+0].v2);
 		i += 2;
 	}
 	// Then the faces
@@ -307,16 +307,16 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 			medges[i+1].v2 = ss->numVerts + face->edges[1]->newMetaIdx;
 			medges[i+2].v1 = ss->numVerts + face->edges[1]->newMetaIdx;
 			medges[i+2].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
-			printf("edge = %d, %d\n", medges[i+0].v1,medges[i+0].v2);
-			printf("edge = %d, %d\n", medges[i+1].v1,medges[i+1].v2);
-			printf("edge = %d, %d\n", medges[i+2].v1,medges[i+2].v2);
+			//printf("medges[%d] = {%d, %d}\n", i, medges[i+0].v1, medges[i+0].v2);
+			//printf("medges[%d] = {%d, %d}\n", i, medges[i+1].v1, medges[i+1].v2);
+			//printf("medges[%d] = {%d, %d}\n", i, medges[i+2].v1, medges[i+2].v2);
 			i += 3;
 		} else {
 			int j;
 			for (j = 0; j < face->numVerts; j++) {
 				medges[i].v1 = ss->numVerts + face->edges[j]->newMetaIdx;
 				medges[i].v2 = face->newVertIdx;
-				printf("edge = %d, %d\n", medges[i].v1,medges[i].v2);
+				//printf("medges[%d] = {%d, %d}\n", i, medges[i].v1, medges[i].v2);
 				i++;
 			}
 		}
@@ -328,24 +328,26 @@ void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts) {
 	FOR_HASH(ss->it, ss->verts) {
 		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
 		copy_v3_v3(mverts[i].co, vert->sl_coords);
-		//normal_float_to_short_v3(mverts[i].no, vert->normal);
+		normal_float_to_short_v3(mverts[i].no, vert->normal);
+		//printf("mverts[%d].co = {%e, %e, %e}\n",i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
 		i++;
 	}
 	FOR_HASH(ss->it, ss->edges) {
 		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
 		copy_v3_v3(mverts[i].co, edge->sl_coords);
-		//normal_float_to_short_v3(mverts[i].no, edge->normal);
+		normal_float_to_short_v3(mverts[i].no, edge->normal);
+		//printf("mverts[%d].co = {%e, %e, %e}\n",i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
 		i++;
 	}
 	FOR_HASH(ss->it, ss->faces) {
 		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
 		if (face->numVerts > 3) {
 			copy_v3_v3(mverts[i].co, face->centroid);
-			//normal_float_to_short_v3(mverts[i].no, face->normal);
+			normal_float_to_short_v3(mverts[i].no, face->normal);
+			//printf("mverts[%d].co = {%e, %e, %e}\n",i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
 			i++;
 		}
 	}
-	printf("Wrote %d verts!\n", i);
 }
 
 static void minmax_v3_v3v3(const float vec[3], float min[3], float max[3])
@@ -437,6 +439,20 @@ static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
 		}
 	}
 	return NULL;
+}
+
+static int _edgeIsBoundary(SLEdge *e) {
+	return e->numFaces < 2;
+}
+
+static int _vertIsBoundary(SLVert *v) {
+	LinkNode *it;
+	FOR_LIST(it, v->edges) {
+		if (_edgeIsBoundary((SLEdge*)it->link)) {
+			return 1;
+		}
+	}
+	return 0;
 }
 
 /////////////////////////////////////////////////////////////
@@ -549,10 +565,8 @@ void SL_processSync(SLSubSurf *ss) {
 	SLEdge *edge;
 	SLVert *vert;
 	LinkNode *it;
-	int i;
 	float avgSharpness;
-	int seamCount, sharpnessCount;
-	int seam;
+	int i, seamCount, sharpnessCount, seam;
 
 	// Compute centroid, used for smoothing and other things;
 	printf("Computing face centroids\n");
@@ -567,6 +581,26 @@ void SL_processSync(SLSubSurf *ss) {
 			add_v3_v3(face->centroid, face->verts[i]->coords);
 		}
 		mul_v3_fl(face->centroid, 1.0f / face->numVerts );
+		
+		if (face->numVerts == 3) {
+			normal_tri_v3(face->normal, face->verts[0]->coords, face->verts[1]->coords, face->verts[2]->coords);
+		} else if (face->numVerts == 4) {
+			normal_quad_v3(face->normal, face->verts[0]->coords, face->verts[1]->coords, face->verts[2]->coords, face->verts[3]->coords);
+		} else {
+			// Adjusted code from mesh.c to work with this structure
+			float *v_prev = face->verts[face->numVerts-1]->coords;
+			float *v_curr;
+			zero_v3(face->normal);
+			for (i = 0; i < face->numVerts; i++) {
+				v_curr = face->verts[i]->coords;
+				add_newell_cross_v3_v3v3(face->normal, v_prev, v_curr);
+				v_prev = v_curr;
+			}
+			if (UNLIKELY(normalize_v3(face->normal) == 0.0f)) {
+				face->normal[2] = 1.0f; /* other axis set to 0.0 */
+			}
+		}
+		zero_v3(face->normal);
 	}
 	// also for edges;
 	FOR_HASH(ss->it, ss->edges) {
@@ -618,17 +652,26 @@ void SL_processSync(SLSubSurf *ss) {
 
 
 		// Now do the smoothing;
-		{
+		if (_vertIsBoundary(vert)) {
+			// Stam-Loop article doesn't cover open edges, so I'm copying what CCG does.
+			// smooth_coord = 1/2 * orig_coord + 1/2 * edge_centroid_average (only boundary edges)
+			int avgCount = 0;
+			zero_v3(vert->sl_coords);
+			FOR_LIST(it, vert->edges) {
+				edge = (SLEdge*)it->link;
+				if (_edgeIsBoundary(edge)) {
+					add_v3_v3(vert->sl_coords, edge->centroid);
+					avgCount++;
+				}
+			}
+			mul_v3_fl(vert->sl_coords, 0.5f / avgCount);
+			madd_v3_v3fl(vert->sl_coords, vert->coords, 0.5f);
+		}
+		else {
 			int avgCount, edgeMult;
 
 			zero_v3(vert->sl_coords);
-
-			// Original coordinate, weight ????
-			madd_v3_v3fl(vert->sl_coords, vert->coords, 2);
-			avgCount = 2;
-			// Seems to match what CCG does (doesn't seem match the research article however) (ONLY FOR A SIMPLE CUBE)
-			//zero_v3(vert->sl_coords);
-			//avgCount = 0;
+			avgCount = 0;
 
 			// Weights for edges are multiple of shared faces;
 			FOR_LIST(it, vert->edges) {
@@ -645,12 +688,20 @@ void SL_processSync(SLSubSurf *ss) {
 					avgCount++; // Note that the subdivided area is a quad for any ngon > 3
 				}
 			}
-			mul_v3_fl(vert->sl_coords, 1.0f / avgCount );
+			mul_v3_fl(vert->sl_coords, 0.5f / avgCount );
+
+			// Original position weighted in
+			madd_v3_v3fl(vert->sl_coords, vert->coords, 0.5f);
+
+			// As stated in the the article by Stam, vertex positions need to be corrected,
+			// or some thing else needs to be done. This doesn't look very nice.
+			// Unfortunately, the article doesn't cover all cases.
 		}
 
 		// Deal with sharpness and seams
 		// Code snipped converted from CCG (undocumented mystery code)
 		if ((sharpnessCount > 1 && vert->numFaces) || seam) {
+			// TODO: Haven't checked this carefully yet.
 			int x;
 			float q[3];
 
@@ -684,6 +735,16 @@ void SL_processSync(SLSubSurf *ss) {
 			/* nCo = nCo + (r - nCo) * avgSharpness */
 			for (x = 0; x < 3; x++) vert->sl_coords[x] += (q[x] - vert->sl_coords[x]) * avgSharpness;
 		}
+		
+		// Compute the normal
+		zero_v3(vert->normal);
+		FOR_LIST(it, vert->faces) {
+			face = (SLFace*)it->link;
+			add_v3_v3(vert->normal, face->normal);
+		}
+		if (UNLIKELY(normalize_v3(vert->normal) == 0.0f)) {
+			vert->normal[2] = 1.0f; /* other axis set to 0.0 */
+		}
 	}
 
 	printf("Computing edge smoothing\n");
@@ -701,12 +762,11 @@ void SL_processSync(SLSubSurf *ss) {
 			// Problem is to take into account edges appropriately.
 
 			// 2 times itself + 1 times itself for every connected face
-			copy_v3_v3(edge->sl_coords, edge->centroid);
-			mul_v3_fl(edge->sl_coords, 2 + 2*edge->numFaces);
-			avgCount = 2 + 2*edge->numFaces;
-			// By trail and error it seems this seems to look good + match what CCG does. (ONLY FOR CUBES THOUGH!)
-			//zero_v3(edge->sl_coords);
-			//avgCount = 0;
+			//copy_v3_v3(edge->sl_coords, edge->centroid);
+			//mul_v3_fl(edge->sl_coords, 4 + 2*edge->numFaces);
+			//avgCount = 4 + 2*edge->numFaces;
+			zero_v3(edge->sl_coords);
+			avgCount = 0;
 
 			FOR_LIST(it, edge->faces) {
 				face = (SLFace*)it->link;
@@ -741,7 +801,12 @@ void SL_processSync(SLSubSurf *ss) {
 			}
 			//printf("edge avgCount = %d\n", avgCount);
 			//printf("edge sl_coords (accumulated) = %e, %e, %e\n", edge->sl_coords[0], edge->sl_coords[1], edge->sl_coords[2]);
-			mul_v3_fl(edge->sl_coords, 1.0f / avgCount);
+			mul_v3_fl(edge->sl_coords, 0.5f / avgCount);
+
+			madd_v3_v3fl(edge->sl_coords, edge->centroid, 0.5f);
+			//mul_v3_fl(edge->sl_coords, 4 + 2*edge->numFaces);
+			//avgCount = 4 + 2*edge->numFaces;
+			
 
 			// And take into account sharpness
 			if (edge->sharpness > 0.0f ) {
@@ -750,6 +815,16 @@ void SL_processSync(SLSubSurf *ss) {
 					edge->sl_coords[x] += edge->sharpness * (edge->centroid[x] - edge->sl_coords[x]);
 				}
 			}
+		}
+		
+		// Compute the normal
+		zero_v3(edge->normal);
+		FOR_LIST(it, edge->faces) {
+			face = (SLFace*)it->link;
+			add_v3_v3(edge->normal, face->normal);
+		}
+		if (UNLIKELY(normalize_v3(edge->normal) == 0.0f)) {
+			edge->normal[2] = 1.0f; /* other axis set to 0.0 */
 		}
 	}
 

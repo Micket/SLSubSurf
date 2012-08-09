@@ -77,6 +77,7 @@ extern GLubyte stipple_quarttone[128]; /* glutil.c, bad level data */
 typedef struct SLDerivedMesh {
 	DerivedMesh dm;
 	SLSubSurf *ss;
+	struct PBVH *pbvh;
 	DMFlagMat *faceFlags;
 	int freeSS;
 } SLDerivedMesh;
@@ -468,6 +469,38 @@ static void slDM_getVertCos(DerivedMesh *dm, float (*cos)[3])
 			copy_v3_v3(cos[i++], f->centroid);
 		}
 	}
+}
+
+static struct PBVH *slDM_getPBVH(Object *ob, DerivedMesh *dm)
+{
+	// TODO: I have no idea about any of this code. The grids and all that crap just seems relevant to CCG.
+	SLDerivedMesh *ssdm = (SLDerivedMesh *)dm;
+	SLSubSurf *ss = ssdm->ss;
+	
+	if (!ob) {
+		ssdm->pbvh = NULL;
+		return NULL;
+	}
+	
+	if (!ob->sculpt)
+		return NULL;
+	
+	if (ob->sculpt->pbvh) {
+		ssdm->pbvh = ob->sculpt->pbvh;
+	}
+	
+	if (ssdm->pbvh)
+		return ssdm->pbvh;
+
+	if (ob->type == OB_MESH) {
+		Mesh *me = ob->data;
+		ob->sculpt->pbvh = ssdm->pbvh = BLI_pbvh_new();
+		BLI_assert(!(me->mface == NULL && me->mpoly != NULL)); /* BMESH ONLY complain if mpoly is valid but not mface */
+		BLI_pbvh_build_mesh(ssdm->pbvh, me->mface, me->mvert,
+							me->totface, me->totvert, &me->vdata);
+	}
+	
+	return ssdm->pbvh;
 }
 
 // OpenGL drawing stuff (self explanatory)
@@ -931,9 +964,9 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 	newdm->getGridFlagMats = NULL;
 	newdm->getGridHidden = NULL;
 	
-	newdm->getPolyMap = NULL; // No idea what this is for
-	newdm->getPBVH = NULL; // No idea what this is for
-	newdm->getVertCos = slDM_getVertCos; // Not sure about this one either.
+	newdm->getPolyMap = NULL; // TODO: No idea what this is for
+	newdm->getPBVH = slDM_getPBVH; // TODO: No idea what this is for
+	newdm->getVertCos = slDM_getVertCos; // TODO: Not sure about this one either.
 
 	newdm->calcNormals = slDM_calcNormals;
 	newdm->recalcTessellation = slDM_recalcTessellation;

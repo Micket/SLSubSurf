@@ -48,8 +48,8 @@ struct SLVert {
 
     unsigned short requiresUpdate, seam;
 
-    // Smoothed position;
-    float sl_coords[3];
+	float sl_coords[3]; // Smoothed position
+	float normal[3];
 };
 
 struct SLEdge {
@@ -64,9 +64,9 @@ struct SLEdge {
     float sharpness;
 
     float centroid[3];
-
-    // Smoothing center node position
-    float sl_coords[3];
+	
+	float sl_coords[3]; // Smoothing center node position
+	float normal[3];
 };
 
 struct SLFace {
@@ -80,6 +80,8 @@ struct SLFace {
     unsigned short requiresUpdate;
 
     float centroid[3];
+	
+	float normal[3];
 };
 
 struct SLSubSurf {
