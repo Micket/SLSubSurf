@@ -23,31 +23,30 @@
 #include "MEM_guardedalloc.h"
 #include "DNA_meshdata_types.h"
 #include "BKE_DerivedMesh.h"
-
-// Convenient macro for looping through linked lists (which is done a lot)
-#define FOR_LIST(it, list) for (it = list; it != NULL; it = it->next)
-// and the same for hashmaps
-#define FOR_HASH(it, list) for (BLI_ghashIterator_init(it,list); !BLI_ghashIterator_isDone(it); BLI_ghashIterator_step(it))
+#include "BKE_cdderivedmesh.h"
+#include "BKE_mesh.h"
 
 /////////////////////////////////////////////////////////////
 // Support functions for faces;
 
-int SL_giveNumberOfInternalFaces(SLFace *face) {
+int SL_giveNumberOfInternalFaces(MPoly *poly) {
 	// Undecided on how anything above quads should be subdivided. Default Catmull-Clark behavior seems reasonable.
-	return (face->numVerts == 3) ? 4 : face->numVerts;
+	return (poly->totloop == 3) ? 4 : poly->totloop;
 }
 
-int SL_giveNumberOfInternalNodes(SLFace *face) {
+int SL_giveNumberOfInternalNodes(MPoly *poly) {
 	// No center node for triangles.
-	return (face->numVerts == 3) ? 0 : 1;
+	return (poly->totloop == 3) ? 0 : 1;
 }
 
-int SL_giveNumberOfInternalEdges(SLFace *face) {
-	return face->numVerts;
+int SL_giveNumberOfInternalEdges(MPoly *poly) {
+	return poly->totloop;
 }
 
-int SL_giveNumberOfInternalLoops(SLFace *face) {
-	return (face->numVerts == 3) ? 12 : face->numVerts*4;
+int SL_giveNumberOfInternalLoops(MPoly *poly) {
+	// We could actually save some memory on loops, since its predictable and we know how they will overlap.
+	// (note, this isn't done though, since the code is simpler is you ignore that)
+	return poly->totloop*4; // (just happens to be correct for triangles as well)
 }
 
 /////////////////////////////////////////////////////////////
@@ -55,218 +54,189 @@ int SL_giveNumberOfInternalLoops(SLFace *face) {
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss) {
 	// Simple things first, corners and interpolated edge verts;
-	int totNodes = ss->numVerts + ss->numEdges; // One new node per edge
+	int i, totNodes = ss->numVerts + ss->numEdges;
 	// Then faces, which varies;
-	FOR_HASH(ss->it, ss->faces) {
-		totNodes += SL_giveNumberOfInternalNodes((SLFace*)BLI_ghashIterator_getValue(ss->it));
+	for (i = 0; i < ss->numFaces; i++) {
+		totNodes += SL_giveNumberOfInternalNodes(&ss->mpoly[i]);
 	}
 	return totNodes;
 }
 
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss) {
-	int totEdges = ss->numEdges * 2;
-	FOR_HASH(ss->it, ss->faces) {
-		totEdges += ((SLFace*)BLI_ghashIterator_getValue(ss->it))->numVerts; // (Holds for both triangles and ngons)
+	int i, totEdges = ss->numEdges * 2;
+	for (i = 0; i < ss->numFaces; i++) {
+		totEdges += SL_giveNumberOfInternalEdges(&ss->mpoly[i]);
 	}
 	return totEdges;
 }
 
 int SL_giveTotalNumberOfSubFaces(SLSubSurf *ss) {
-	// Since we know that all subdivided elements have the same number of sub-faces;
-	int totFaces = 0; // One new node per edge
-	// Then faces, which varies;
-	FOR_HASH(ss->it, ss->faces) {
-		totFaces += SL_giveNumberOfInternalFaces((SLFace*)BLI_ghashIterator_getValue(ss->it));
+	int i, totFaces = 0;
+	for (i = 0; i < ss->numFaces; i++) {
+		totFaces += SL_giveNumberOfInternalFaces(&ss->mpoly[i]);
 	}
 	return totFaces;
 }
 
 int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
-	// Since we know that all subdivided elements have the same number of sub-faces;
-	int totLoops = 0; // One new node per edge
-	// Then faces, which varies;
-	FOR_HASH(ss->it, ss->faces) {
-		totLoops += SL_giveNumberOfInternalLoops((SLFace*)BLI_ghashIterator_getValue(ss->it));
+	int i, totLoops = 0;
+	for (i = 0; i < ss->numFaces; i++) {
+		totLoops += SL_giveNumberOfInternalLoops(&ss->mpoly[i]);
 	}
 	return totLoops;
 }
 
 /////////////////////////////////////////////////////////////
 
-// Sets all (new) indices necessary for copying stuff back into DerivedMesh
-void SL_renumberAll(SLSubSurf *ss) {
-	int idxA = 0, idxB = 0;
-
-	printf("Renumbering new subverts and subedges\n");
-	FOR_HASH(ss->it, ss->verts) {
-		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
-		vert->newVertIdx = idxA++;
-	}
-	FOR_HASH(ss->it, ss->edges) {
-		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
-		edge->newMetaIdx = idxB++;
-	}
-	idxA += idxB;
-	idxB *= 2;
-	FOR_HASH(ss->it, ss->faces) {
-		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		if (face->numVerts > 3)
-			face->newVertIdx = idxA++;
-		face->newEdgeStartIdx = idxB;
-		idxB += face->numVerts;
-	}
-}
-
 void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
-	int i = 0, j, prevJ, subEdgeNext, subEdgePrev;
-	SLFace *face;
-	SLVert *vert;
-	SLEdge *eNext, *ePrev;
+	int i, j, k, prevJ, subEdgeNext, subEdgePrev, faceEdgeStartIdx, faceVertStartIdx;
+	MPoly *poly;
+	MLoop *loop;
+	MEdge *eNext, *ePrev;
 
-	FOR_HASH(ss->it, ss->faces) {
-		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		if (face->numVerts == 3) {
+	k = 0;
+	faceEdgeStartIdx = ss->numEdges*2; // Number the new internal edges as we go
+	faceVertStartIdx = ss->numVerts + ss->numEdges; // Number the new internal verts as we go
+	for (i = 0; i < ss->numFaces; i++) {
+		poly = &ss->mpoly[i];
+		loop = &ss->mloop[poly->loopstart];
+		if (poly->totloop == 3) {
 			// First the corner triangles
 			for (j = 0; j < 3; j++) {
 				prevJ = (j + 2) % 3;
-				eNext = face->edges[j];
-				ePrev = face->edges[prevJ];
-				vert = face->verts[j];
+				eNext = &ss->medge[loop[j].e];
+				ePrev = &ss->medge[loop[prevJ].e];
 
 				// Check ordering of edge (to determine which sub-edge should be used)
-				subEdgeNext = eNext->v0 != vert;
-				subEdgePrev = ePrev->v0 != vert;
+				subEdgeNext = eNext->v1 != loop[j].v;
+				subEdgePrev = ePrev->v1 != loop[j].v;
 
 				// Corner to next edge;
-				mloops[i+0].v = vert->newVertIdx;
-				mloops[i+0].e = eNext->newMetaIdx*2 + subEdgeNext;
+				mloops[k+0].v = loop[j].v;
+				mloops[k+0].e = loop[j].e*2 + subEdgeNext;
 				// next edge node to internal edge j;
-				mloops[i+1].v = eNext->newMetaIdx + ss->numVerts;
-				mloops[i+1].e = face->newEdgeStartIdx + j;
+				mloops[k+1].v = loop[j].e + ss->numVerts;
+				mloops[k+1].e = faceEdgeStartIdx + j;
 				// previous edge node to previous edge;
-				mloops[i+2].v = ePrev->newMetaIdx + ss->numVerts;
-				mloops[i+2].e = ePrev->newMetaIdx*2 + subEdgePrev;
-				i += 3;
+				mloops[k+2].v = loop[prevJ].e + ss->numVerts;
+				mloops[k+2].e = loop[prevJ].e*2 + subEdgePrev;
+				k += 3;
 			}
 
 			// Last poly is the center polygon, only internal edges and edge nodes
-			mloops[i+0].v = face->edges[2]->newMetaIdx + ss->numVerts;
-			mloops[i+0].e = face->newEdgeStartIdx;
-			mloops[i+1].v = face->edges[0]->newMetaIdx + ss->numVerts;
-			mloops[i+1].e = face->newEdgeStartIdx+1;
-			mloops[i+2].v = face->edges[1]->newMetaIdx + ss->numVerts;
-			mloops[i+2].e = face->newEdgeStartIdx+2;
-			i += 3;
+			mloops[k+0].v = loop[2].e + ss->numVerts;
+			mloops[k+0].e = faceEdgeStartIdx;
+			mloops[k+1].v = loop[0].e + ss->numVerts;
+			mloops[k+1].e = faceEdgeStartIdx+1;
+			mloops[k+2].v = loop[1].e + ss->numVerts;
+			mloops[k+2].e = faceEdgeStartIdx+2;
+			k += 3;
+			
+			faceEdgeStartIdx += 3;
+			//faceVertStartIdx += 0;
 		} else {
-			for (j = 0; j < face->numVerts; j++) { // Loop over each sub-quad;
+			for (j = 0; j < poly->totloop; j++) { // Loop over each sub-quad;
 				// Unsure if i negative values work, adding numVerts just in case.
-				prevJ = (j - 1 + face->numVerts) % face->numVerts;
-				eNext = face->edges[j];
-				ePrev = face->edges[prevJ];
-				vert = face->verts[j];
+				prevJ = (j - 1 + poly->totloop) % poly->totloop;
+				eNext = &ss->medge[loop[j].e];
+				ePrev = &ss->medge[loop[prevJ].e];
 
 				// Check ordering of edge (to determine which sub-edge should be used)
-				subEdgeNext = eNext->v0 != vert;
-				subEdgePrev = ePrev->v0 != vert;
+				subEdgeNext = eNext->v1 != loop[j].v;
+				subEdgePrev = ePrev->v1 != loop[j].v;
 
 				// Starting from the corner node
-				mloops[i+0].v = vert->newVertIdx;
-				mloops[i+0].e = eNext->newMetaIdx*2 + subEdgeNext;
+				mloops[k+0].v = loop[j].v;
+				mloops[k+0].e = loop[j].e*2 + subEdgeNext;
 				// go to next edge
-				mloops[i+1].v = eNext->newMetaIdx + ss->numVerts;
-				mloops[i+1].e = face->newEdgeStartIdx + j;
+				mloops[k+1].v = loop[j].e + ss->numVerts;
+				mloops[k+1].e = faceEdgeStartIdx + j;
 				// then to midpoint
-				mloops[i+2].v = face->newVertIdx;
-				mloops[i+2].e = face->newEdgeStartIdx + prevJ;
+				mloops[k+2].v = faceVertStartIdx;
+				mloops[k+2].e = faceEdgeStartIdx + prevJ;
 				// then to previous edge,
-				mloops[i+3].v = ePrev->newMetaIdx + ss->numVerts;
-				mloops[i+3].e = ePrev->newMetaIdx*2 + subEdgePrev;
-				i += 4;
-				//printf("mloops.v = %e, %e, %e, %e\n", mloops[i+0].v, mloops[i+1].v, mloops[i+2].v, mloops[i+3].v);
+				mloops[k+3].v = loop[prevJ].e + ss->numVerts;
+				mloops[k+3].e = loop[prevJ].e*2 + subEdgePrev;
+				k += 4;
+				//printf("mloops.v = %e, %e, %e, %e\n", mloops[k+0].v, mloops[k+1].v, mloops[k+2].v, mloops[k+3].v);
 			}
+			faceEdgeStartIdx += poly->totloop;
+			faceVertStartIdx += 1;
 		}
 	}
 }
 
-void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys) {
-	int i = 0, j, k = 0;
-	FOR_HASH(ss->it, ss->faces) {
-		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		int flag = (faceFlags) ? faceFlags->flag : ME_SMOOTH;
-		int mat_nr = (faceFlags) ? faceFlags->mat_nr : 0;
-		faceFlags++;
-		if (face->numVerts == 3) {
+void SL_copyNewPolys(SLSubSurf *ss, MPoly *mpolys) {
+	int i, j, k = 0, m = 0;
+	for (i = 0; i < ss->numFaces; i++) {
+		MPoly *poly = &ss->mpoly[i];
+		if (poly->totloop == 3) {
 			for (j = 0; j < 4; j++) { // note! 4 faces
-				mpolys[i].loopstart = k;
-				mpolys[i].totloop = 3;
-				mpolys[i].mat_nr = mat_nr;
-				mpolys[i].flag = flag;
-				i += 1;
+				mpolys[m].loopstart = k;
+				mpolys[m].totloop = 3;
+				mpolys[m].mat_nr = poly->mat_nr;
+				mpolys[m].flag = poly->flag;
+				m += 1;
 				k += 3;
 			}
 		} else {
-			for (j = 0; j < face->numVerts; j++) {
-				mpolys[i].loopstart = k;
-				mpolys[i].totloop = 4;
-				mpolys[i].mat_nr = mat_nr;
-				mpolys[i].flag = flag;
-				i += 1;
+			for (j = 0; j < poly->totloop; j++) {
+				mpolys[m].loopstart = k;
+				mpolys[m].totloop = 4;
+				mpolys[m].mat_nr = poly->mat_nr;
+				mpolys[m].flag = poly->flag;
+				m += 1;
 				k += 4;
 			}
 		}
 	}
 }
 
-void SL_copyNewTessFaces(SLSubSurf *ss, DMFlagMat *faceFlags, MFace *mfaces)
+void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 {
-	int i = 0, j, prevJ;
-	SLVert *vert;
-	SLEdge *eNext, *ePrev;
+	int i, j, prevJ, k, faceVertStartIdx;
+	MPoly *poly;
+	MLoop *loop;
 
-	FOR_HASH(ss->it, ss->faces) {
-		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		int flag = (faceFlags) ? faceFlags->flag : ME_SMOOTH;
-		int mat_nr = (faceFlags) ? faceFlags->mat_nr : 0;
-		faceFlags++;
-		if (face->numVerts == 3) {
+	k = 0;
+	faceVertStartIdx = ss->numVerts + ss->numEdges; // Number the new internal verts as we go
+	for (i = 0; i < ss->numFaces; i++) {
+		poly = &ss->mpoly[i];
+		loop = &ss->mloop[poly->loopstart];
+		if (poly->totloop == 3) {
 			// First the corner triangles
 			for (j = 0; j < 3; j++) {
 				prevJ = (j + 2) % 3;
-				eNext = face->edges[j];
-				ePrev = face->edges[prevJ];
-				vert = face->verts[j];
 
-				mfaces[i].v1 = vert->newVertIdx;
-				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
-				mfaces[i].v3 = ePrev->newMetaIdx + ss->numVerts;
-				mfaces[i].v4 = 0;
-				mfaces[i].mat_nr = mat_nr;
-				mfaces[i].flag = flag;
-				i += 1;
+				mfaces[k].v1 = loop[j].v;
+				mfaces[k].v2 = loop[j].e + ss->numVerts;
+				mfaces[k].v3 = loop[prevJ].e + ss->numVerts;
+				mfaces[k].v4 = 0;
+				mfaces[k].mat_nr = poly->mat_nr;
+				mfaces[k].flag = poly->flag;
+				k += 1;
 			}
 
-			mfaces[i].v1 = face->edges[0]->newMetaIdx + ss->numVerts;
-			mfaces[i].v2 = face->edges[1]->newMetaIdx + ss->numVerts;
-			mfaces[i].v3 = face->edges[2]->newMetaIdx + ss->numVerts;
-			mfaces[i].v4 = -1;
+			mfaces[k].v1 = loop[0].e + ss->numVerts;
+			mfaces[k].v2 = loop[1].e + ss->numVerts;
+			mfaces[k].v3 = loop[2].e + ss->numVerts;
+			mfaces[k].v4 = 0;
 
-			i += 1;
+			k += 1;
 		} else {
-			for (j = 0; j < face->numVerts; j++) { // Loop over each sub-quad;
+			for (j = 0; j < poly->totloop; j++) { // Loop over each sub-quad;
 				// Unsure if i negative values work, adding numVerts just in case.
-				prevJ = (j - 1 + face->numVerts) % face->numVerts;
-				eNext = face->edges[j];
-				ePrev = face->edges[prevJ];
-				vert = face->verts[j];
+				prevJ = (j - 1 + poly->totloop) % poly->totloop;
 
-				mfaces[i].v1 = vert->newVertIdx;
-				mfaces[i].v2 = eNext->newMetaIdx + ss->numVerts;
-				mfaces[i].v3 = vert->newVertIdx;
-				mfaces[i].v4 = ePrev->newMetaIdx + ss->numVerts;
-				mfaces[i].mat_nr = mat_nr;
-				mfaces[i].flag = flag;
-				i += 1;
+				mfaces[k].v1 = loop[j].v;
+				mfaces[k].v2 = loop[j].e + ss->numVerts;
+				mfaces[k].v3 = faceVertStartIdx;
+				mfaces[k].v4 = loop[prevJ].e + ss->numVerts;
+				mfaces[k].mat_nr = poly->mat_nr;
+				mfaces[k].flag = poly->flag;
+				k += 1;
 			}
+			faceVertStartIdx++;
 		}
 	}
 }
@@ -285,67 +255,43 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 
 	And ngons, the natural ordering is used
 	*/
-	int i = 0;
+	int i, j, k, faceVertStartIdx;
 	// First the original edges
-	FOR_HASH(ss->it, ss->edges) {
-		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
-		medges[i+0].v1 = edge->v0->newVertIdx;
-		medges[i+0].v2 = ss->numVerts + edge->newMetaIdx;
-		medges[i+1].v1 = ss->numVerts + edge->newMetaIdx;
-		medges[i+1].v2 = edge->v1->newVertIdx;
+	k = 0;
+	for (i = 0; i < ss->numEdges; i++) {
+		MEdge *edge = &ss->medge[i];
+		medges[k+0].v1 = edge->v1;
+		medges[k+0].v2 = ss->numVerts + i;
+		medges[k+1].v1 = ss->numVerts + i;
+		medges[k+1].v2 = edge->v2;
 		//printf("medges[%d] = {%d, %d}\n", i, medges[i+0].v1, medges[i+0].v2);
 		//printf("medges[%d] = {%d, %d}\n", i+1, medges[i+0].v1, medges[i+0].v2);
-		i += 2;
+		k += 2;
 	}
 	// Then the faces
-	FOR_HASH(ss->it, ss->faces) {
-		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		if (face->numVerts == 3) {
-			medges[i+0].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
-			medges[i+0].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
-			medges[i+1].v1 = ss->numVerts + face->edges[0]->newMetaIdx;
-			medges[i+1].v2 = ss->numVerts + face->edges[1]->newMetaIdx;
-			medges[i+2].v1 = ss->numVerts + face->edges[1]->newMetaIdx;
-			medges[i+2].v2 = ss->numVerts + face->edges[2]->newMetaIdx;
-			//printf("medges[%d] = {%d, %d}\n", i, medges[i+0].v1, medges[i+0].v2);
-			//printf("medges[%d] = {%d, %d}\n", i, medges[i+1].v1, medges[i+1].v2);
-			//printf("medges[%d] = {%d, %d}\n", i, medges[i+2].v1, medges[i+2].v2);
-			i += 3;
+	faceVertStartIdx = ss->numVerts + ss->numEdges; // Number the new internal verts as we go
+	for (i = 0; i < ss->numFaces; i++) {
+		MPoly *poly = &ss->mpoly[i];
+		MLoop *loop = &ss->mloop[poly->loopstart];
+		if (poly->totloop == 3) {
+			medges[k+0].v1 = ss->numVerts + loop[0].e;
+			medges[k+0].v2 = ss->numVerts + loop[2].e;
+			medges[k+1].v1 = ss->numVerts + loop[0].e;
+			medges[k+1].v2 = ss->numVerts + loop[1].e;
+			medges[k+2].v1 = ss->numVerts + loop[1].e;
+			medges[k+2].v2 = ss->numVerts + loop[2].e;
+			//printf("medges[%d] = {%d, %d}\n", i, medges[k+0].v1, medges[k+0].v2);
+			//printf("medges[%d] = {%d, %d}\n", i, medges[k+1].v1, medges[k+1].v2);
+			//printf("medges[%d] = {%d, %d}\n", i, medges[k+2].v1, medges[k+2].v2);
+			k += 3;
 		} else {
-			int j;
-			for (j = 0; j < face->numVerts; j++) {
-				medges[i].v1 = ss->numVerts + face->edges[j]->newMetaIdx;
-				medges[i].v2 = face->newVertIdx;
-				//printf("medges[%d] = {%d, %d}\n", i, medges[i].v1, medges[i].v2);
-				i++;
+			for (j = 0; j < poly->totloop; j++) {
+				medges[k].v1 = ss->numVerts + loop[j].e;
+				medges[k].v2 = faceVertStartIdx;
+				//printf("medges[%d] = {%d, %d}\n", i, medges[k].v1, medges[k].v2);
+				k++;
 			}
-		}
-	}
-}
-
-void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts) {
-	int i = 0;
-	FOR_HASH(ss->it, ss->verts) {
-		SLVert *vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
-		copy_v3_v3(mverts[i].co, vert->sl_coords);
-		normal_float_to_short_v3(mverts[i].no, vert->normal);
-		//printf("mverts[%d].co = {%e, %e, %e}\n",i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
-		i++;
-	}
-	FOR_HASH(ss->it, ss->edges) {
-		SLEdge *edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
-		copy_v3_v3(mverts[i].co, edge->sl_coords);
-		normal_float_to_short_v3(mverts[i].no, edge->normal);
-		//printf("mverts[%d].co = {%e, %e, %e}\n",i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
-		i++;
-	}
-	FOR_HASH(ss->it, ss->faces) {
-		SLFace *face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		if (face->numVerts > 3) {
-			copy_v3_v3(mverts[i].co, face->centroid);
-			normal_float_to_short_v3(mverts[i].no, face->normal);
-			//printf("mverts[%d].co = {%e, %e, %e}\n",i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
-			i++;
+			faceVertStartIdx++;
 		}
 	}
 }
@@ -361,94 +307,157 @@ static void minmax_v3_v3v3(const float vec[3], float min[3], float max[3])
 }
 
 void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]) {
+	int i;
 	if (ss->numVerts == 0) {
 		zero_v3(min_r);
 		zero_v3(max_r);
 		return;
 	}
 
-	FOR_HASH(ss->it, ss->verts) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
-		SLVert *vert = BLI_ghashIterator_getValue(ss->it);
-		minmax_v3_v3v3(vert->coords, min_r, max_r);
+	for(i = 0; i < ss->numVerts; i++) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
+		MVert *vert = &ss->mvert[i];
+		minmax_v3_v3v3(vert->co, min_r, max_r);
 	}
 }
 
 /////////////////////////////////////////////////////////////
 
-void _nofreefp(void *UNUSED(x)) {
-	// Nothing to free, its just the pointer, or freed elsewhere
-}
-
-SLSubSurf* SL_SubSurf_new(int smoothing) {
-	MemArena *ma = BLI_memarena_new((1<<16), "SL subsurf");
-	SLSubSurf *ss = (SLSubSurf*)BLI_memarena_alloc(ma, sizeof(SLSubSurf));
-	ss->verts = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL verts");
-	ss->edges = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL edges");
-	ss->faces = BLI_ghash_new(BLI_ghashutil_ptrhash, BLI_ghashutil_ptrcmp, "SL faces");
-
-	ss->it = BLI_ghashIterator_new(ss->verts); // Note: Can be used for every hash anyway (after init)
-
-	ss->numVerts = ss->numEdges = ss->numFaces = 0;
-	ss->memArena = ma;
+SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
+	int numLoops;
+	SLSubSurf *ss = (SLSubSurf*)MEM_callocN(sizeof(SLSubSurf), "slsubsurf");
 	ss->smoothing = smoothing;
+	ss->numVerts = ss->numEdges = ss->numFaces = 0;
+	
+	ss->poly2vert = MEM_callocN(sizeof(int)*ss->numVerts, "sl face2vert");
+	
+	ss->input = input;
+	ss->vertexCos = vertexCos;
+	ss->mvert = CustomData_get_layer(&input->vertData, CD_MVERT);
+	ss->medge = CustomData_get_layer(&input->edgeData, CD_MEDGE);
+	ss->mpoly = CustomData_get_layer(&input->polyData, CD_MPOLY);
+	ss->mloop = CustomData_get_layer(&input->loopData, CD_MLOOP);
+	
+	ss->numVerts = input->getNumVerts(input);
+	ss->numEdges = input->getNumEdges(input);
+	ss->numFaces = input->getNumPolys(input);
+	numLoops = input->getNumLoops(input);
+	
+	// Necessary backwards mapping (could potentially be done without these, but that would make partial updates impossible (not that partial updates are supported yet))
+	create_vert_poly_map(&ss->vert2poly, &ss->vert2poly_mem,
+		ss->mpoly, ss->mloop, ss->numVerts, ss->numFaces, numLoops);
+	create_vert_edge_map(&ss->vert2edge, &ss->vert2edge_mem,
+		ss->medge, ss->numVerts, ss->numEdges);
+	create_edge_poly_map(&ss->edge2poly, &ss->edge2poly_mem,
+		ss->mpoly, ss->mloop, ss->numEdges, ss->numFaces, numLoops);
+
+	ss->o_vert = NULL;
+	ss->o_edge = NULL;
+	ss->o_poly = NULL;
+	ss->o_loop = NULL;
+	ss->no = NULL;
+
 	return ss;
 }
 
 void SL_SubSurf_free(SLSubSurf *ss) {
-	BLI_ghashIterator_free(ss->it);
-
-	BLI_ghash_free(ss->verts, _nofreefp, _nofreefp);
-	BLI_ghash_free(ss->edges, _nofreefp, _nofreefp);
-	BLI_ghash_free(ss->faces, _nofreefp, _nofreefp);
-
-	BLI_memarena_free(ss->memArena);
+	MEM_freeN(ss->poly2vert);
+	MEM_freeN(ss->vert2poly);
+	MEM_freeN(ss->vert2poly_mem);
+	MEM_freeN(ss->vert2edge);
+	MEM_freeN(ss->vert2edge_mem);
+	MEM_freeN(ss->edge2poly);
+	MEM_freeN(ss->edge2poly_mem);
+	if (ss->no) {
+		MEM_freeN(ss->no);
+	}
+	if (ss->eco) {
+		MEM_freeN(ss->eco);
+	}
+	MEM_freeN(ss);
 }
 
-/////////////////////////////////////////////////////////////
-// Helpers for connecting & disconnecting edges-verts-faces
-// Using linked lists here;
-
-static void _vertAddFace(SLSubSurf *ss, SLVert *v, SLFace *f) {
-	BLI_linklist_prepend_arena(&v->faces, f, ss->memArena);
-	v->requiresUpdate = 1;
-	v->numFaces++;
+/*
+static void slDM_release(DerivedMesh *dm) {
+	//SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
+	if (DM_release(dm)) { // Just doing what CCG code does...
+		SL_SubSurf_free(sldm->ss);
+		MEM_freeN(sldm);
+	}
 }
+*/
 
-static void _vertAddEdge(SLSubSurf *ss, SLVert *v, SLEdge *e) {
-	BLI_linklist_prepend_arena(&v->edges, e, ss->memArena);
-	v->requiresUpdate = 1;
-	v->numEdges++;
-}
+DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
+	int numVerts, numEdges, numFaces, numLoops;
+	int i, *polyidx;
+	DerivedMesh *output;
 
-static void _edgeAddFace(SLSubSurf *ss, SLEdge *e, SLFace *f) {
-	BLI_linklist_prepend_arena(&e->faces, f, ss->memArena);
-	e->requiresUpdate = 1;
-	e->numFaces++;
+	numVerts = SL_giveTotalNumberOfSubVerts(ss);
+	numEdges = SL_giveTotalNumberOfSubEdges(ss);
+	numFaces = SL_giveTotalNumberOfSubFaces(ss);
+	numLoops = SL_giveTotalNumberOfSubLoops(ss);
+	// Outside is responsible for freeing this memory.
+	output = CDDM_from_template(ss->input, numVerts, numEdges, numFaces, numLoops, numFaces);
+	
+	// TODO: Replace *some* functions from default CDDM.
+	
+	// Convenience. Directly access these.
+	ss->o_vert = CDDM_get_verts(output);
+	ss->o_edge = CDDM_get_edges(output);
+	ss->o_loop = CDDM_get_loops(output);
+	ss->o_poly = CDDM_get_polys(output);
+
+	ss->no = MEM_callocN(sizeof(float[3])*numVerts, "sl normals"); // Shouldn't need to do this.
+	// Face centroids aren't moved during smoothing (by any algorithm i've seen), but edge centroids do. 
+	// When computing the smoothing part, we need to keep track of both, so we can't use o_vert->co directly.
+	ss->eco = MEM_callocN(sizeof(float[3])*numEdges, "sl edge centroids");
+	
+	// We can directly fill the structural part, which doesn't actually need the new vertex coordinates.
+	SL_copyNewPolys(ss, ss->o_poly);
+	SL_copyNewLoops(ss, ss->o_loop);
+	SL_copyNewEdges(ss, ss->o_edge);
+	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output)); // We don't need the faces for anything.
+	// TODO: Will probably need some other info copied over from here 
+	
+	// Other data we must fill;
+	/* We absolutely need that layer, else it's no valid tessellated data! */
+	polyidx = CustomData_get_layer(&output->faceData, CD_POLYINDEX);
+	for (i = 0; i < numFaces; i++) polyidx[i] = i; // TODO: Check this, i think its OK. (it should just be 1 face per poly)
+
+	//CustomData_add_layer(&output->vertData, CD_ORIGINDEX, CD_CALLOC, NULL, numVerts);
+	//CustomData_add_layer(&output->edgeData, CD_ORIGINDEX, CD_CALLOC, NULL, numEdges);
+	//CustomData_add_layer(&output->faceData, CD_ORIGINDEX, CD_CALLOC, NULL, numTessFaces);
+	//CustomData_add_layer(&output->polyData, CD_ORIGINDEX, CD_CALLOC, NULL, numPolys);
+	
+	return output;
 }
 
 /////////////////////////////////////////////////////////////
 // Misc helpers
 
-static SLEdge *_sharedEdge(SLVert *v0, SLVert *v1) {
-	LinkNode *edge0, *edge1;
-	FOR_LIST(edge0, v0->edges) {
-		FOR_LIST(edge1, v1->edges) {
-			if ( edge0->link == edge1->link) {
-				return (SLEdge*)edge0->link;
+/*
+static int _sharedEdge(MeshElemMap *v2e1, MeshElemMap *v2e2) {
+	int i, j, e;
+	for (i = 0; i < v2e1->count; i++) {
+		e = v2e1->indices[i];
+		for (j = 0; j < v2e2->count; j++) {
+			if ( e == v2e1->indices[j]) {
+				return e;
 			}
 		}
 	}
-	return NULL;
+	return -1;
+}
+*/
+
+static int _edgeIsBoundary(SLSubSurf *ss, int e) {
+	return ss->edge2poly[e].count < 2;
 }
 
-static int _edgeIsBoundary(SLEdge *e) {
-	return e->numFaces < 2;
-}
-
-static int _vertIsBoundary(SLVert *v) {
-	LinkNode *it;
-	FOR_LIST(it, v->edges) {
-		if (_edgeIsBoundary((SLEdge*)it->link)) {
+static int _vertIsBoundary(SLSubSurf *ss, int v) {
+	int i;
+	MeshElemMap *map = &ss->vert2edge[v];
+	for (i = 0; i < map->count; i++) {
+		if (_edgeIsBoundary(ss, map->indices[i])) {
 			return 1;
 		}
 	}
@@ -456,382 +465,331 @@ static int _vertIsBoundary(SLVert *v) {
 }
 
 /////////////////////////////////////////////////////////////
-// Note! Must be added as verts, then edges, then faces and removed in the opposite order
-
-void SL_addVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
-	SLVert *vert = BLI_memarena_alloc(ss->memArena, sizeof(SLVert));
-	copy_v3_v3(vert->coords, coords);
-	vert->edges = NULL;
-	vert->faces = NULL;
-	vert->numFaces = 0;
-	vert->numEdges = 0;
-	vert->seam = seam;
-	// Add to hashmap
-	BLI_ghash_insert(ss->verts, hashkey, vert);
-	ss->numVerts++;
-	vert->requiresUpdate = 1;
-}
-
-void SL_updateVert(SLSubSurf *ss, void *hashkey, float coords[3], int seam) {
-	int i;
-	LinkNode *it;
-	SLVert *vert = BLI_ghash_lookup(ss->verts, hashkey);
-	BLI_assert(vert != NULL);
-	copy_v3_v3(vert->coords, coords);
-	vert->seam = seam;
-	// Connected edges and faces need to updated
-	FOR_LIST(it, vert->faces) {
-		SLFace *face = (SLFace*)it->link;
-		face->requiresUpdate = 1;
-		// Also effects all edges on the connected face (since the center point moves)
-		for (i = 0; i < face->numVerts; i++) {
-			face->edges[i]->requiresUpdate = 1;
-			face->verts[i]->requiresUpdate = 1;
-		}
-	}
-	vert->requiresUpdate = 1;
-}
-
-// Must be called after syncVert
-void SL_addEdge(SLSubSurf *ss, void *hashkey, void *vertkey0, void *vertkey1, float sharpness) {
-	SLEdge *edge = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge));
-
-	edge->v0 = BLI_ghash_lookup(ss->verts, vertkey0);
-	edge->v1 = BLI_ghash_lookup(ss->verts, vertkey1);
-	edge->faces = NULL;
-	edge->numFaces = 0;
-	edge->sharpness = sharpness;
-	edge->requiresUpdate = 1;
-
-	_vertAddEdge(ss, edge->v0, edge);
-	_vertAddEdge(ss, edge->v1, edge);
-
-	// Add to hashmap
-	BLI_ghash_insert(ss->edges, hashkey, edge);
-	ss->numEdges++;
-}
-
-void SL_updateEdge(SLSubSurf *ss, void *hashkey, float sharpness) {
-	LinkNode *it;
-	SLEdge *edge = BLI_ghash_lookup(ss->edges, hashkey);
-	BLI_assert(edge != NULL);
-	// This means that sharpness has changed (v0 and v1 aren't allowed to change, that would indicate a *new* edge)
-	edge->sharpness = sharpness;
-	// Affects the directly connected faces and verts
-	edge->v0->requiresUpdate = 1;
-	edge->v1->requiresUpdate = 1;
-	FOR_LIST(it, edge->faces) {
-		((SLFace*)it->link)->requiresUpdate = 1;
-	}
-}
-
-// Must be called after syncEdge
-void SL_addFace(SLSubSurf *ss, void *hashkey, int numVerts, void **vertkeys) {
-	int i;
-	SLEdge *edge;
-	SLVert *vert, *nextVert;
-	SLFace *face;
-
-	// New face? Then;
-	face = BLI_memarena_alloc(ss->memArena, sizeof(SLFace));
-	// Static lists for faces (more convenient, predictable size)
-	face->verts = BLI_memarena_alloc(ss->memArena, sizeof(SLVert*)*numVerts);
-	face->edges = BLI_memarena_alloc(ss->memArena, sizeof(SLEdge*)*numVerts);
-
-	face->numVerts = numVerts;
-	face->requiresUpdate = 1;
-	for (i = 0; i < numVerts; i++) {
-		// Verts
-		vert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[i]);
-		face->verts[i] = vert;
-		_vertAddFace(ss, vert, face);
-		// Then edges
-		nextVert = (SLVert*)BLI_ghash_lookup(ss->verts, vertkeys[(i+1) % numVerts]);
-		edge = _sharedEdge(vert, nextVert);
-		face->edges[i] = edge;
-		_edgeAddFace(ss, edge, face);
-	}
-
-	// Add to hashmap
-	BLI_ghash_insert(ss->faces, hashkey, face);
-	ss->numFaces++;
-}
-
-/////////////////////////////////////////////////////////////
 // Actual smoothing stuff
-
 void SL_processSync(SLSubSurf *ss) {
-	SLFace *face;
-	SLEdge *edge;
-	SLVert *vert;
-	LinkNode *it;
+	MPoly *poly;
+	MLoop *loop;
+	MEdge *edge;
+	MVert *vert;
+	MeshElemMap *v2e, *v2p, *e2p;
+	float *coord;
+	float *normal;
+	// Some values taken from "Combining 4- and 3-direction Subdivision"
+	//float alpha[7] = { 0.f, 0.25f, 0.3f, 3.0f/8.0f, 0.5f, 3.0f/5.0f, 5.0f/8.0f };
+	float alphabar[7] = { 0.f, -0.5f, -0.4f, -0.25f, 0.0f, 0.2f, 0.25f };
+	//float beta[7] = { 0.f, 0.75f, 0.35f, 0.208333f, 0.125f, 0.08f, 0.0625f};
 	float avgSharpness;
-	int i, seamCount, sharpnessCount, seam;
+	int i, j, k, seamCount, sharpnessCount, seam, faceVertIdx;
 
 	// Compute centroid, used for smoothing and other things;
 	printf("Computing face centroids\n");
-	FOR_HASH(ss->it, ss->faces) {
-		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
-		if (!face->requiresUpdate) continue;
-		face->requiresUpdate = 0; // (do this here, since face center node isn't smoothed)
-
-		zero_v3(face->centroid);
-
-		for (i = 0; i < face->numVerts; i++) {
-			add_v3_v3(face->centroid, face->verts[i]->coords);
-		}
-		mul_v3_fl(face->centroid, 1.0f / face->numVerts );
+	faceVertIdx = ss->numVerts + ss->numEdges;
+	for (i = 0; i < ss->numFaces; i++) {
+		poly = &ss->mpoly[i];
+		//if (!face->requiresUpdate) continue; // TODO
+		//face->requiresUpdate = 0;
+		loop = &ss->mloop[poly->loopstart];
 		
-		if (face->numVerts == 3) {
-			normal_tri_v3(face->normal, face->verts[0]->coords, face->verts[1]->coords, face->verts[2]->coords);
-		} else if (face->numVerts == 4) {
-			normal_quad_v3(face->normal, face->verts[0]->coords, face->verts[1]->coords, face->verts[2]->coords, face->verts[3]->coords);
+		if (poly->totloop == 3) {
+			// Nothing to do for triangles.
+			ss->poly2vert[i] = -1;
 		} else {
-			// Adjusted code from mesh.c to work with this structure
-			float *v_prev = face->verts[face->numVerts-1]->coords;
-			float *v_curr;
-			zero_v3(face->normal);
-			for (i = 0; i < face->numVerts; i++) {
-				v_curr = face->verts[i]->coords;
-				add_newell_cross_v3_v3v3(face->normal, v_prev, v_curr);
-				v_prev = v_curr;
+			// Might as well use the final vert coordinate and normal. Vert centers aren't smoothed.
+			coord = ss->o_vert[faceVertIdx].co;
+			normal = ss->no[faceVertIdx];
+
+			zero_v3(coord);
+			for (j = 0; j < poly->totloop; j++) {
+				add_v3_v3(coord, ss->mvert[loop[j].v].co);
 			}
-			if (UNLIKELY(normalize_v3(face->normal) == 0.0f)) {
-				face->normal[2] = 1.0f; /* other axis set to 0.0 */
-			}
+			mul_v3_fl(coord, 1.0f / poly->totloop );
+
+			mesh_calc_poly_normal(poly, loop, ss->mvert, normal);
+			normal_float_to_short_v3(ss->o_vert[faceVertIdx].no, normal); // Copy it over to the vert directly
+			ss->poly2vert[i] = faceVertIdx;
+			printf("Face coordinate[%d]= {%e, %e, %e}\n", faceVertIdx, ss->o_vert[faceVertIdx].co[1],ss->o_vert[faceVertIdx].co[1],ss->o_vert[faceVertIdx].co[2]);
+			faceVertIdx++;
 		}
-		zero_v3(face->normal);
 	}
 	// also for edges;
-	FOR_HASH(ss->it, ss->edges) {
+	for (i = 0; i < ss->numEdges; i++) {
 		int x;
-		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
-		if (!edge->requiresUpdate) continue;
-
+		edge = &ss->medge[i];
+		//if (!edge->requiresUpdate) continue;
+		coord = ss->eco[i]; // Directly on to the final vertex
 		for (x = 0; x < 3; x++)
-			edge->centroid[x] = 0.5*edge->v0->coords[x] + 0.5*edge->v1->coords[x];
+			coord[x] = 0.5*ss->mvert[edge->v1].co[x] + 0.5*ss->mvert[edge->v2].co[x];
 	}
 
-	printf("Computing vert smoothing (smooth %s)\n", ss->smoothing ? "on":"off");
+	printf("Computing vert smoothing (smooth %s) for %d verts\n", ss->smoothing ? "on":"off", ss->numVerts);
 	// Loop over vertices and smooth out the Stam-Loop subsurface coordinate;
-	FOR_HASH(ss->it, ss->verts) {
-		vert = (SLVert*)BLI_ghashIterator_getValue(ss->it);
-		if (!vert->requiresUpdate) continue;
-		vert->requiresUpdate = 0;
+	for (i = 0; i < ss->numVerts; i++) {
+		vert = &ss->mvert[i];
+		//if (!vert->requiresUpdate) continue;
+		//vert->requiresUpdate = 0;
+		coord = ss->o_vert[i].co;
+		normal = ss->no[i];
+		
 		if (!ss->smoothing) {
-			copy_v3_v3(vert->sl_coords, vert->coords);
-			continue;
-		}
+			copy_v3_v3(coord, vert->co);
+		} else {
+			// Compute average sharpness and seam;
+			v2e = &ss->vert2edge[i];
+			seamCount = 0;
+			sharpnessCount = 0;
+			avgSharpness = 0.0f;
+			for (j = 0; j < v2e->count; j++) {
+				int e = v2e->indices[j];
+				edge = &ss->medge[e];
+				e2p = &ss->edge2poly[e];
 
-		// Compute average sharpness and seam;
-		seamCount = 0;
-		sharpnessCount = 0;
-		avgSharpness = 0.0f;
-		seam = vert->seam;
-		FOR_LIST(it, vert->edges) {
-			edge = (SLEdge*)it->link;
+				if ( (edge->flag & ME_SEAM) && e2p->count < 2)
+					seamCount++;
 
-			if (seam && edge->numFaces < 2)
-				seamCount++;
-
-			if (edge->sharpness != 0.0f) {
-				sharpnessCount++;
-				avgSharpness += edge->sharpness;
-			}
-		}
-
-		if (sharpnessCount) {
-			avgSharpness /= sharpnessCount;
-			if ( avgSharpness > 1.0f ) {
-				avgSharpness = 1.0f;
-			}
-		}
-
-		if (seamCount < 2 || seamCount != vert->numEdges)
-			seam = 0;
-
-
-		// Now do the smoothing;
-		if (_vertIsBoundary(vert)) {
-			// Stam-Loop article doesn't cover open edges, so I'm copying what CCG does.
-			// smooth_coord = 1/2 * orig_coord + 1/2 * edge_centroid_average (only boundary edges)
-			int avgCount = 0;
-			zero_v3(vert->sl_coords);
-			FOR_LIST(it, vert->edges) {
-				edge = (SLEdge*)it->link;
-				if (_edgeIsBoundary(edge)) {
-					add_v3_v3(vert->sl_coords, edge->centroid);
-					avgCount++;
+				if (ss->medge[e].crease != 0) {
+					sharpnessCount++;
+					avgSharpness += ss->medge[e].crease / 256.f;
 				}
 			}
-			mul_v3_fl(vert->sl_coords, 0.5f / avgCount);
-			madd_v3_v3fl(vert->sl_coords, vert->coords, 0.5f);
-		}
-		else {
-			int avgCount, edgeMult;
 
-			zero_v3(vert->sl_coords);
-			avgCount = 0;
-
-			// Weights for edges are multiple of shared faces;
-			FOR_LIST(it, vert->edges) {
-				edge = (SLEdge*)it->link;
-				edgeMult = edge->numFaces == 0 ? 1 : edge->numFaces;
-				madd_v3_v3fl(vert->sl_coords, edge->centroid, edgeMult);
-				avgCount += edgeMult;
-			}
-
-			FOR_LIST(it, vert->faces) {
-				face = (SLFace*)it->link;
-				if (face->numVerts > 3) {
-					add_v3_v3(vert->sl_coords, face->centroid);
-					avgCount++; // Note that the subdivided area is a quad for any ngon > 3
+			if (sharpnessCount) {
+				avgSharpness /= sharpnessCount;
+				if ( avgSharpness > 1.0f ) {
+					avgSharpness = 1.0f;
 				}
 			}
-			mul_v3_fl(vert->sl_coords, 0.5f / avgCount );
 
-			// Original position weighted in
-			madd_v3_v3fl(vert->sl_coords, vert->coords, 0.5f);
+			if (seamCount < 2 || seamCount != v2e->count)
+				seam = 0;
 
-			// As stated in the the article by Stam, vertex positions need to be corrected,
-			// or some thing else needs to be done. This doesn't look very nice.
-			// Unfortunately, the article doesn't cover all cases.
-		}
+			// Prepare to fill the output coordinate
+			zero_v3(coord);
 
-		// Deal with sharpness and seams
-		// Code snipped converted from CCG (undocumented mystery code)
-		if ((sharpnessCount > 1 && vert->numFaces) || seam) {
-			// TODO: Haven't checked this carefully yet.
-			int x;
-			float q[3];
+			// Now do the smoothing;
+			if (_vertIsBoundary(ss, i)) {
+				// No articles cover open edges, so I'm copying what CCG does.
+				// smooth_coord = 1/2 * orig_coord + 1/2 * edge_centroid_average (only boundary edges)
+				int avgCount = 0;
+				zero_v3(coord);
+				for (j = 0; j < v2e->count; j++) {
+					int e = v2e->indices[j];
+					if (_edgeIsBoundary(ss, e)) {
+						add_v3_v3(coord, ss->eco[e]);
+						avgCount++;
+					}
+				}
+				mul_v3_fl(coord, 0.5f / avgCount);
+				madd_v3_v3fl(coord, vert->co, 0.5f);
+			}
+			else {
+				// Tried to copy the article by Stam & Loop, but it didn't look right. Copying Catmull-Clark behavior (see wikipedia)
+				// This entire part is up for debate. Feel free to modify until a nice smoothing is obtained.
+				int avgCount, edgeMult;
 
-			if (seam) {
-				avgSharpness = 1.0f;
-				sharpnessCount = seamCount;
+				avgCount = 0;
+
+				// Weights for edges are multiple of shared faces;
+				for (j = 0; j < v2e->count; j++) {
+					int e = v2e->indices[j];
+					e2p = &ss->edge2poly[e];
+					// Lose edges, not covered normally by descriptions for smoothing. Just making something up here
+					edgeMult = e2p->count == 0 ? 1 : 0;
+					for (k = 0; k < e2p->count; k++) {
+						int p = e2p->indices[k];
+						poly = &ss->mpoly[p];
+						if (poly->totloop == 3)
+							edgeMult++;
+						else
+							edgeMult+=2;
+					}
+					madd_v3_v3fl(coord, ss->eco[e], edgeMult);
+					avgCount += edgeMult;
+				}
+				v2p = &ss->vert2poly[i];
+				mul_v3_fl(coord, (1.0f - alphabar[v2p->count]) / avgCount);
+				madd_v3_v3fl(coord, vert->co, alphabar[v2p->count]);
+				//printf("vert, avgCount = %d, alphabar = %f, coords = {%f, %f, %f}, ls_coords = {%f, %f, %f}\n", avgCount, alphabar[vert->numEdges], 
+				//	   vert->coords[0], vert->coords[1], vert->coords[2], vert->sl_coords[0], vert->sl_coords[1], vert->sl_coords[2]);
+
+				/*
+				f or (j = 0; j < v2p->count; j++) {
+					int p = v2p->indices[j];
+					poly = &ss->mpoly[p];
+					if (poly->totloop > 3) {
+						add_v3_v3(coord, ???? face->centroid); // Need to generate index to new vert to pull this off
+						avgCount++; // Note that the subdivided area is a quad for any ngon > 3
+					}
+				}*/
+				// Leftovers from various tests;
+				//mul_v3_fl(vert->sl_coords, 1.0f - );
+				// Original position weighted in
+				//mul_v3_fl(vert->sl_coords, 0.5f / avgCount );
+				//madd_v3_v3fl(vert->sl_coords, vert->coords, 0.5f);
+				//madd_v3_v3fl(vert->sl_coords, vert->coords, avgCount/3.0f-3.0f);
+				//mul_v3_fl(vert->sl_coords, 3.0f / avgCount);
+
+				// As stated in the the article by Stam, vertex positions need to be corrected,
+				// or some thing else needs to be done. This doesn't look very nice.
+				// Unfortunately, the article doesn't cover all cases.
 			}
 
-			zero_v3(q);
-			FOR_LIST(it, vert->edges) {
-				edge = (SLEdge*)it->link;
+			// Deal with sharpness and seams
+			// Code snipped converted from CCG (undocumented mystery code)
+			if ((sharpnessCount > 1 && v2p->count > 0) || seam) {
+				// TODO: Haven't checked this carefully yet.
+				int x;
+				float q[3];
+
 				if (seam) {
-					if (edge->numFaces < 2)
-						add_v3_v3(q, edge->centroid);
+					avgSharpness = 1.0f;
+					sharpnessCount = seamCount;
 				}
-				else if (edge->sharpness != 0.0f) {
-					add_v3_v3(q, edge->centroid);
+
+				zero_v3(q);
+				for (j = 0; j < v2e->count; j++) {
+					int e = v2e->indices[j];
+					e2p = &ss->edge2poly[e];
+					edge = &ss->medge[e];
+					if ( edge->flag & ME_SEAM ) {
+						if (e2p->count < 2)
+							add_v3_v3(q, ss->eco[e]);
+					}
+					else if (edge->crease != 0) {
+						add_v3_v3(q, ss->eco[e]);
+					}
 				}
+
+				mul_v3_fl(q, 1.0f / sharpnessCount);
+
+				if (sharpnessCount != 2 || seam) {
+					/* q = q + (co - q) * avgSharpness */
+					for (x = 0; x < 3; x++) q[x] += (vert->co[x] - q[x])*avgSharpness;
+				}
+
+				/* r = co * 0.75 + q * 0.25 */
+				for (x = 0; x < 3; x++) q[x] = vert->co[x]*0.75f + q[x]*0.25f;
+
+				/* nCo = nCo + (r - nCo) * avgSharpness */
+				for (x = 0; x < 3; x++) coord[x] += (q[x] - coord[x]) * avgSharpness;
 			}
-
-			mul_v3_fl(q, 1.0f / sharpnessCount);
-
-			if (sharpnessCount != 2 || seam) {
-				/* q = q + (co - q) * avgSharpness */
-				for (x = 0; x < 3; x++) q[x] += (vert->coords[x] - q[x])*avgSharpness;
-			}
-
-			/* r = co * 0.75 + q * 0.25 */
-			for (x = 0; x < 3; x++) q[x] = vert->coords[x]*0.75f + q[x]*0.25f;
-
-			/* nCo = nCo + (r - nCo) * avgSharpness */
-			for (x = 0; x < 3; x++) vert->sl_coords[x] += (q[x] - vert->sl_coords[x]) * avgSharpness;
 		}
 		
 		// Compute the normal
-		zero_v3(vert->normal);
-		FOR_LIST(it, vert->faces) {
-			face = (SLFace*)it->link;
-			add_v3_v3(vert->normal, face->normal);
+		zero_v3(normal);
+		for (j = 0; j < v2p->count; j++) {
+			int p = v2p->indices[j];
+			add_v3_v3(normal, ss->no[ss->poly2vert[p]]); // TODO Need a map for faces.
 		}
-		if (UNLIKELY(normalize_v3(vert->normal) == 0.0f)) {
-			vert->normal[2] = 1.0f; /* other axis set to 0.0 */
+		if (UNLIKELY(normalize_v3(normal) == 0.0f)) {
+			normal[2] = 1.0f; /* other axis set to 0.0 */
 		}
+		normal_float_to_short_v3(ss->o_vert[i].no, normal);
+		
+		printf("Smoothed coordinate[%d] = {%e, %e, %e}\n", i, ss->o_vert[i].co[0], ss->o_vert[i].co[1], ss->o_vert[i].co[2]);
 	}
 
 	printf("Computing edge smoothing\n");
 	// Loop over edges and smooth
-	FOR_HASH(ss->it, ss->edges) {
-		edge = (SLEdge*)BLI_ghashIterator_getValue(ss->it);
-		if (!edge->requiresUpdate) continue;
-		edge->requiresUpdate = 0;
+	for (i = 0; i < ss->numEdges; i++) {
+		int vertidx = ss->numVerts + i;
+		edge = &ss->medge[i];
+		//if (!edge->requiresUpdate) continue; // TODO
+		//edge->requiresUpdate = 0;
+		e2p = &ss->edge2poly[i];		
+		coord = ss->o_vert[vertidx].co;
 		// Create the interpolated coordinates
-		if (!ss->smoothing || edge->numFaces < 2 || edge->sharpness >= 1.0f) { // If its an edge, or maximum sharpness, then just average.
-			copy_v3_v3(edge->sl_coords, edge->centroid);
+		if (!ss->smoothing || e2p->count < 2 || edge->crease >= 256) { // If its an edge, or maximum sharpness, then just average.
+			copy_v3_v3(coord, ss->eco[i]); // Already there.
 		} else { // Otherwise smooth
-			int avgCount;
-			// Now, this is a bit tricky to deal with ngons. Quads and tris only would be a lot simpler.
-			// Problem is to take into account edges appropriately.
-
-			// 2 times itself + 1 times itself for every connected face
-			//copy_v3_v3(edge->sl_coords, edge->centroid);
-			//mul_v3_fl(edge->sl_coords, 4 + 2*edge->numFaces);
-			//avgCount = 4 + 2*edge->numFaces;
-			zero_v3(edge->sl_coords);
+			int avgCount, numTris = 0, numQuads = 0, numNeighbors;
+			// This entire part is up for debate. Feel free to modify until a nice smoothing is obtained.
+			
+			// Copy over the centroid to a temporary variable.
+			zero_v3(coord);
 			avgCount = 0;
 
-			FOR_LIST(it, edge->faces) {
-				face = (SLFace*)it->link;
-				if (face->numVerts == 3) {
+			e2p = &ss->edge2poly[i];
+			for (j = 0; j < e2p->count; j++) {
+				int p = e2p->indices[j];
+				poly = &ss->mpoly[p];
+				if (poly->totloop == 3) {
 					// Triangles are split differently from the rest;
 					// There are connections to the center nodes of the two opposite edges
-					for (i = 0; i < face->numVerts; i++) {
-						SLEdge *tempEdge = face->edges[i];
-						if ( tempEdge != edge ) { // Then opposite edge
-							madd_v3_v3fl(edge->sl_coords, tempEdge->centroid, 2);
+					loop = &ss->mloop[poly->loopstart];
+					for (k = 0; k < poly->totloop; k++) {
+						int temp_e = loop[k].e;
+						if ( temp_e != i ) { // Then opposite edge
+							madd_v3_v3fl(coord, ss->eco[temp_e], 2);
 						}
 					}
+					numTris++;
 					avgCount += 4; // 2 edges each
 				} else {
 					// Otherwise all ngons are split into quads, leaving one center node and edges
-					madd_v3_v3fl(edge->sl_coords, face->centroid, 2);
+					madd_v3_v3fl(coord, ss->o_vert[ss->poly2vert[p]].co, 4);
 					// Now find the other edges that share a node;
-					for (i = 0; i < face->numVerts; i++) {
-						SLEdge *tempEdge = face->edges[i];
-						if ( tempEdge != edge ) {
+					/*for (j = 0; j < poly->totloop; j++) {
+						int temp_e = loop[k].e;
+						if ( temp_e != j ) {
+							MEdge *tempEdge = &ss->medge[temp_e];
 							// Check for a shared node;
-							if (tempEdge->v0 == edge->v0 ||
-								tempEdge->v0 == edge->v1 ||
-								tempEdge->v1 == edge->v0 ||
-								tempEdge->v1 == edge->v1) {
-								add_v3_v3(edge->sl_coords, tempEdge->centroid);
+							if (tempEdge->v1 == edge->v1 || tempEdge->v1 == edge->v2 ||
+								tempEdge->v2 == edge->v1 || tempEdge->v2 == edge->v2) {
+								add_v3_v3(coord, ss->eco[temp_e]);
 							}
 						}
-					}
+					}*/
+					numQuads++;
 					avgCount += 4; // 1x2 from centroid + 2x1 from edges
 				}
 			}
+			madd_v3_v3fl(coord, ss->eco[i], 2*(numTris+numQuads*2));
+			avgCount += 2*(numTris+numQuads*2);
+
+			numNeighbors = numTris*2 + numQuads + 2;
+			mul_v3_fl(coord, (1.0f - alphabar[numNeighbors])/avgCount);
+			madd_v3_v3fl(coord, ss->eco[i], alphabar[numNeighbors]);
+			//printf("edge, numTris = %d, numQuads = %d, avgCount = %d, alphabar = %f, coords = {%f, %f, %f}, ls_coords = {%f, %f, %f}\n", numTris, numQuads, avgCount, alphabar[numNeighbors],
+			//	   edge->centroid[0], edge->centroid[1], edge->centroid[2], edge->sl_coords[0], edge->sl_coords[1], edge->sl_coords[2]);
+			
 			//printf("edge avgCount = %d\n", avgCount);
 			//printf("edge sl_coords (accumulated) = %e, %e, %e\n", edge->sl_coords[0], edge->sl_coords[1], edge->sl_coords[2]);
-			mul_v3_fl(edge->sl_coords, 0.5f / avgCount);
+			//mul_v3_fl(edge->sl_coords, 3.0f / avgCount);
 
-			madd_v3_v3fl(edge->sl_coords, edge->centroid, 0.5f);
+			// Trying this for now (should be equivalent to CCG if its all quads) (compare with wikipedia, avgCount = 3*n )
+			//madd_v3_v3fl(edge->sl_coords, edge->centroid, avgCount/3.0f-3.0f);
+			//mul_v3_fl(edge->sl_coords, 3.0f / avgCount);
 			//mul_v3_fl(edge->sl_coords, 4 + 2*edge->numFaces);
 			//avgCount = 4 + 2*edge->numFaces;
-			
 
 			// And take into account sharpness
-			if (edge->sharpness > 0.0f ) {
+			if (edge->crease > 0 ) {
 				int x;
 				for (x = 0; x < 3; x++) {
-					edge->sl_coords[x] += edge->sharpness * (edge->centroid[x] - edge->sl_coords[x]);
+					coord[x] += (edge->crease / 256.f) * (ss->eco[i][x] - coord[x]);
 				}
 			}
+			printf("Smoothed coordinate[%d] (edge) = {%e, %e, %e}\n", vertidx, ss->o_vert[vertidx].co[0], ss->o_vert[vertidx].co[1], ss->o_vert[vertidx].co[2]);
 		}
 		
 		// Compute the normal
-		zero_v3(edge->normal);
-		FOR_LIST(it, edge->faces) {
-			face = (SLFace*)it->link;
-			add_v3_v3(edge->normal, face->normal);
+		normal = ss->no[vertidx];
+		zero_v3(normal);
+		for (j = 0; j < v2p->count; j++) {
+			int p = v2p->indices[j];
+			add_v3_v3(normal, ss->no[ss->poly2vert[p]]);
 		}
-		if (UNLIKELY(normalize_v3(edge->normal) == 0.0f)) {
-			edge->normal[2] = 1.0f; /* other axis set to 0.0 */
+		if (UNLIKELY(normalize_v3(normal) == 0.0f)) {
+			normal[2] = 1.0f;
 		}
+		normal_float_to_short_v3(ss->o_vert[vertidx].no, normal);
 	}
 
 	// Loop over faces and smooth
 	/*
-	FOR_HASH(ss->it, ss->faces) {
-		face = (SLFace*)BLI_ghashIterator_getValue(ss->it);
+	for (i = 0; i < ss->numFaces; i++) {
+		poly = &ss->mpoly[i];
+		loop = &ss->mloop[poly->loopstart];
 	}*/
 }
 

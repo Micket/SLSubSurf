@@ -36,7 +36,6 @@
 #include <float.h>
 
 #include "MEM_guardedalloc.h"
-
 #include "DNA_mesh_types.h"
 #include "DNA_meshdata_types.h"
 #include "DNA_modifier_types.h"
@@ -75,219 +74,61 @@
 extern GLubyte stipple_quarttone[128]; /* glutil.c, bad level data */
 
 typedef struct SLDerivedMesh {
-	DerivedMesh dm;
+	DerivedMesh dm; // Output derived mesh.
 	SLSubSurf *ss;
-	struct PBVH *pbvh;
-	DMFlagMat *faceFlags;
-	int freeSS;
+	int drawInteriorEdges;
 } SLDerivedMesh;
-
-/*
- * This code copies over the data from the previous derived mesh on top of the existing (from scratch, nothing incremental)
- * Vertex coordinates can come from an external array "vertexCos" (used in for example sculpting in multisurf).
- */
-static void slss_sync_from_derivedmesh(SLSubSurf *ss, DerivedMesh *dm, float (*vertexCos)[3])
-{
-	MVert *mv;
-	MEdge *me;
-	MLoop *ml, *mloop;
-	MPoly *mp;
-	int totvert = dm->getNumVerts(dm);
-	int totedge = dm->getNumEdges(dm);
-	int i, j;
-	void **fVerts = NULL;
-	BLI_array_declare(fVerts);
-
-	mv = dm->getVertArray(dm);
-	//index = (int *)dm->getVertDataArray(dm, CD_ORIGINDEX);
-	for (i = 0; i < totvert; i++, mv++) {
-		SL_addVert(ss, SET_INT_IN_POINTER(i), vertexCos ? vertexCos[i] : mv->co, 0);
-		//((int *)ccgSubSurf_getVertUserData(ss, v))[1] = (index) ? *index++ : i;
-	}
-
-	me = dm->getEdgeArray(dm);
-	//index = (int *)dm->getEdgeDataArray(dm, CD_ORIGINDEX);
-	for (i = 0; i < totedge; i++, me++) {
-		SL_addEdge(ss, SET_INT_IN_POINTER(i), SET_INT_IN_POINTER(me->v1), SET_INT_IN_POINTER(me->v2), me->crease);
-		//((int *)ccgSubSurf_getEdgeUserData(ss, e))[1] = (index) ? *index++ : i;
-	}
-
-	mloop = dm->getLoopArray(dm);
-	mp = dm->getPolyArray(dm);
-	//index = DM_get_poly_data_layer(dm, CD_ORIGINDEX);
-	for (i = 0; i < dm->numPolyData; i++, mp++) {
-		BLI_array_empty(fVerts);
-		BLI_array_grow_items(fVerts, mp->totloop);
-		ml = mloop + mp->loopstart;
-		for (j = 0; j < mp->totloop; j++, ml++) {
-			fVerts[j] = SET_INT_IN_POINTER(ml->v);
-		}
-		SL_addFace(ss, SET_INT_IN_POINTER(i), mp->totloop, fVerts);
-		//((int *)ccgSubSurf_getFaceUserData(ss, f))[1] = (index) ? *index++ : i;
-	}
-	BLI_array_free(fVerts);
-	SL_processSync(ss);
-	SL_renumberAll(ss);
-	printf("Sync processed. Now time to copy it back...\n");
-}
-
-/*
- * This function only updates the existing vertex coordinates.
- */
-static void slss_update_coords_from_derivedmesh(SLSubSurf *ss, DerivedMesh *dm, float (*vertexCos)[3])
-{
-	MVert *mv;
-	MEdge *me;
-	int totvert = dm->getNumVerts(dm);
-	int totedge = dm->getNumEdges(dm);
-	int i;
-
-	mv = dm->getVertArray(dm);
-	//index = (int *)dm->getVertDataArray(dm, CD_ORIGINDEX);
-	for (i = 0; i < totvert; i++, mv++) {
-		SL_updateVert(ss, SET_INT_IN_POINTER(i), vertexCos ? vertexCos[i] : mv->co, 0);
-	}
-
-	me = dm->getEdgeArray(dm);
-	//index = (int *)dm->getEdgeDataArray(dm, CD_ORIGINDEX);
-	for (i = 0; i < totedge; i++, me++) {
-		SL_updateEdge(ss, SET_INT_IN_POINTER(i), me->crease);
-	}
-
-	SL_processSync(ss);
-	printf("Sync processed. Now time to copy it back...\n");
-}
-
-/*
- * This function creates the underlying subsurf structure.
- */
-static SLSubSurf *_getSLSubSurf(SLSubSurf *prevSS, int smoothing)
-{
-	if (prevSS) {
-		prevSS->smoothing = smoothing;
-		return prevSS;
-	}
-	return SL_SubSurf_new(smoothing);
-}
-
-
-static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
-									int drawInteriorEdges,
-									int useSubsurfUv,
-									DerivedMesh *dm);
-
 
 /*
  * Entrypoint for modifier. Should return the output DM based on the input DM.
  */
 struct DerivedMesh *sl_subsurf_make_derived_from_derived(
-	struct DerivedMesh *dm,
+	struct DerivedMesh *input,
 	struct SubsurfModifierData *smd,
 	float (*vertCos)[3],
 	SubsurfFlags flags)
 {
 	SLSubSurf *ss;
-	int useSimple = smd->subdivType == ME_SIMPLE_SL_SUBSURF;
+	int levels;
+	int smoothing = smd->subdivType == ME_SL_SUBSURF;
 	//SLFlags useAging = smd->flags & eSubsurfModifierFlag_DebugIncr ? CCG_USE_AGING : 0;
 	int useSubsurfUv = smd->flags & eSubsurfModifierFlag_SubsurfUv;
 	int drawInteriorEdges = !(smd->flags & eSubsurfModifierFlag_ControlEdges);
-	SLDerivedMesh *result;
-	if (flags & SUBSURF_FOR_EDIT_MODE) {
-		int levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->levels) : smd->levels;
-
-		ss = _getSLSubSurf(NULL, !useSimple);
-		smd->emCache = NULL; // TODO: Deal with caches
-		slss_sync_from_derivedmesh(ss, dm, vertCos);
-
-		result = getSLDerivedMesh(ss, drawInteriorEdges, useSubsurfUv, dm);
-		result->freeSS = 1; // TODO: Revert after mCache support is finalized
+	DerivedMesh *result;
+	
+	// We don't use caches for this modifier
+	if (smd->emCache) {
+		smd->cacheFree(smd->emCache);
+		smd->emCache = NULL;
 	}
-	else if (flags & SUBSURF_USE_RENDER_PARAMS) {
-		/* Do not use cache in render mode. */
-		int levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->renderLevels) : smd->renderLevels;
-
-		if (levels == 0)
-			return dm;
-
-		ss = _getSLSubSurf(NULL, !useSimple);
-
-		slss_sync_from_derivedmesh(ss, dm, vertCos);
-
-		result = getSLDerivedMesh(ss, drawInteriorEdges, useSubsurfUv, dm);
-		result->freeSS = 1;
+	if (smd->mCache) {
+		smd->cacheFree(smd->mCache);
+		smd->mCache = NULL;
 	}
-	else {
-		int useIncremental = (smd->flags & eSubsurfModifierFlag_Incremental);
-		int levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->levels) : smd->levels;
 
-		/* It is quite possible there is a much better place to do this. It
-		 * depends a bit on how rigorously we expect this function to never
-		 * be called in editmode. In semi-theory we could share a single
-		 * cache, but the handles used inside and outside editmode are not
-		 * the same so we would need some way of converting them. Its probably
-		 * not worth the effort. But then why am I even writing this long
-		 * comment that no one will read? Hmmm. - zr
-		 *
-		 * Addendum: we can't really ensure that this is never called in edit
-		 * mode, so now we have a parameter to verify it. - brecht
-		 */
-		if (!(flags & SUBSURF_IN_EDIT_MODE) && smd->emCache) {
-			smd->cacheFree(smd->emCache);
-			smd->emCache = NULL;
-		}
-
-		if (useIncremental && (flags & SUBSURF_IS_FINAL_CALC)) {
-			ss = _getSLSubSurf(NULL, !useSimple);
-			//smd->mCache = ss = _getSLSubSurf(smd->mCache, !useSimple);
-			//smd->cacheFree = SL_SubSurf_free;
-
-			slss_sync_from_derivedmesh(ss, dm, vertCos);
-
-			result = getSLDerivedMesh(ss, drawInteriorEdges, useSubsurfUv, dm);
-			result->freeSS = 1; // TODO: Revert after mCache support is finalized
-		}
-		else {
-			if (smd->mCache && (flags & SUBSURF_IS_FINAL_CALC)) {
-				smd->cacheFree(smd->mCache);
-				smd->mCache = NULL;
-			}
-
-			ss = _getSLSubSurf(NULL, !useSimple);
-			slss_sync_from_derivedmesh(ss, dm, vertCos);
-
-			result = getSLDerivedMesh(ss, drawInteriorEdges, useSubsurfUv, dm);
-
-			if (flags & SUBSURF_IS_FINAL_CALC)
-				;//smd->mCache = ss;
-				//smd->cacheFree = SL_SubSurf_free;
-			else
-				result->freeSS = 1;
-		}
+	if (flags & SUBSURF_USE_RENDER_PARAMS) {
+		levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->renderLevels) : smd->renderLevels;
 	}
-	/*
-	{
-		// Checking output;
-		DerivedMesh *newdm = (DerivedMesh*)result;
-		int i;
-		MVert *mverts;
-		printf("output verts = %d\n", newdm->getNumVerts(newdm));
-		mverts = MEM_callocN(sizeof(MVert) *newdm->getNumVerts(newdm), "test verts");
-		newdm->copyVertArray(newdm, mverts);
-		for (i = 0; i < newdm->getNumVerts(newdm); i++) {
-			printf("Vert %d; coords = [%e, %e, %e]\n", i, mverts[i].co[0],mverts[i].co[1],mverts[i].co[2]);
-		}
-		MEM_freeN(mverts);
+	else /*if (flags & SUBSURF_FOR_EDIT_MODE)*/ {
+		levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->levels) : smd->levels;
 	}
-	*/
-	return (DerivedMesh *)result;
+	if (levels == 0)
+		return input;
+	
+	ss = SL_SubSurf_new(smoothing, input, vertCos);
+	result = SL_SubSurf_constructOutput(ss);
+	SL_processSync(ss); // Actually computes coordinates and such.
+	// TODO: NOW WE LEAK MEMORY! FIXME FIXME FIXME Need to use the SLDerivedMesh and overload the release function
+	return result;
 }
 
+#if 0
 // Functions for the DerivedMesh-class;
 static void slDM_getMinMax(DerivedMesh *dm, float min_r[3], float max_r[3]) {
 	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
 	SL_getMinMax(sldm->ss, min_r, max_r);
 }
-
+	
 static void slDM_recalcTessellation(DerivedMesh *UNUSED(dm)) { /* Nothing to do */ }
 static void slDM_calcNormals(DerivedMesh *UNUSED(dm)) { /* Nothing to do */ }
 
@@ -299,9 +140,17 @@ static int slDM_getNumPolys(DerivedMesh *dm) { return dm->numPolyData; }
 static int slDM_getNumTessFaces(DerivedMesh *dm) { return dm->numTessFaceData; }
 
 // Copy stuff
-static void slDM_copyFinalVertArray(DerivedMesh *dm, MVert *mvert) {
-	SL_copyNewVerts(((SLDerivedMesh *)dm)->ss, mvert);
-}
+/*static void slDM_copyFinalVertArray(DerivedMesh *dm, MVert *mvert) {
+	int i;
+	SLSubSurf *ss = ((SLDerivedMesh*)dm)->ss;
+	MVert *overt = ss->o_vert;
+	for (i = 0; i < SL_giveTotalNumberOfSubVerts(ss); i++) {
+		mvert[i].bweight = overt[i].bweight;
+		mvert[i].flag = overt[i].flag;
+		copy_v3_v3(mvert[i].co = overt[i].co);
+		copy_v3_v3_short(mvert[i].no = overt[i].no);
+	}
+}*/
 static void slDM_copyFinalEdgeArray(DerivedMesh *dm, MEdge *medge) {
 	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
 	SL_copyNewEdges(sldm->ss, medge);
@@ -312,22 +161,11 @@ static void slDM_copyFinalLoopArray(DerivedMesh *dm, MLoop *mloop) {
 }
 static void slDM_copyFinalPolyArray(DerivedMesh *dm, MPoly *mpoly) {
 	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	DMFlagMat *faceFlags = sldm->faceFlags;
-	SL_copyNewPolys(sldm->ss, faceFlags, mpoly);
+	SL_copyNewPolys(sldm->ss, mpoly);
 }
 static void slDM_copyFinalTessFaceArray(DerivedMesh *dm, MFace *mface) {
 	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	DMFlagMat *faceFlags = sldm->faceFlags;
-	SL_copyNewTessFaces(sldm->ss, faceFlags, mface);
-}
-
-static void slDM_release(DerivedMesh *dm) {
-	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	if (DM_release(dm)) { // Just doing what CCG code does...
-		if (sldm->freeSS) SL_SubSurf_free(sldm->ss);
-		MEM_freeN(sldm->faceFlags);
-		MEM_freeN(sldm);
-	}
+	SL_copyNewTessFaces(sldm->ss, mface);
 }
 
 // Unsure about these three
@@ -337,7 +175,7 @@ static void *slDM_get_vert_data_layer(DerivedMesh *dm, int type) {
 		SLDerivedMesh *ssdm = (SLDerivedMesh *)dm;
 		SLSubSurf *ss = ssdm->ss;
 		int *origindex;
-		int a, tot;
+		int a, i, tot;
 
 		/* Avoid re-creation if the layer exists already */
 		origindex = DM_get_vert_data_layer(dm, CD_ORIGINDEX);
@@ -350,8 +188,8 @@ static void *slDM_get_vert_data_layer(DerivedMesh *dm, int type) {
 
 		// original vertices are at the beginning
 		a = 0;
-		for (BLI_ghashIterator_init(ss->it,ss->verts); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it), a++) {
-			origindex[a] = GET_INT_FROM_POINTER(BLI_ghashIterator_getKey(ss->it));
+		for (i = 0; i < ss->numVerts; i++, a++) {
+			origindex[a] = i;
 		}
 		// Then new verts, no original index
 		tot = SL_giveTotalNumberOfSubVerts(ss);
@@ -370,7 +208,7 @@ static void *slDM_get_edge_data_layer(DerivedMesh *dm, int type) {
 		SLDerivedMesh *ssdm = (SLDerivedMesh *)dm;
 		SLSubSurf *ss = ssdm->ss;
 		int *origindex;
-		int a, tot;
+		int a, i, tot;
 
 		/* Avoid re-creation if the layer exists already */
 		origindex = DM_get_edge_data_layer(dm, CD_ORIGINDEX);
@@ -382,10 +220,9 @@ static void *slDM_get_edge_data_layer(DerivedMesh *dm, int type) {
 		origindex = DM_get_edge_data_layer(dm, CD_ORIGINDEX);
 
 		a = 0;
-		for (BLI_ghashIterator_init(ss->it, ss->edges); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it), a++) {
-			int mapIndex = GET_INT_FROM_POINTER(BLI_ghashIterator_getKey(ss->it));
-			origindex[a++] = mapIndex;
-			origindex[a++] = mapIndex;
+		for (i = 0; i < ss->numEdges; i++, a++) {
+			origindex[a++] = i;
+			origindex[a++] = i;
 		}
 		// Then new internal edges, no original index
 		tot = SL_giveTotalNumberOfSubEdges(ss);
@@ -401,10 +238,10 @@ static void *slDM_get_edge_data_layer(DerivedMesh *dm, int type) {
 static void *slDM_get_tessface_data_layer(DerivedMesh *dm, int type) {
 	if (type == CD_ORIGINDEX) {
 		/* create origindex on demand to save memory */
-		SLDerivedMesh *sldm = (CCGDerivedMesh *)dm;
+		SLDerivedMesh *sldm = (SLDerivedMesh *)dm;
 		SLSubSurf *ss = sldm->ss;
 		int *origindex;
-		int a, i;
+		int a, i, j;
 
 		/* Avoid re-creation if the layer exists already */
 		origindex = DM_get_tessface_data_layer(dm, CD_ORIGINDEX);
@@ -416,11 +253,10 @@ static void *slDM_get_tessface_data_layer(DerivedMesh *dm, int type) {
 		origindex = DM_get_tessface_data_layer(dm, CD_ORIGINDEX);
 
 		a = 0;
-		for (BLI_ghashIterator_init(ss->it,ss->faces); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it), a++) {
-			SLFace *f = BLI_ghashIterator_getValue(ss->it);
-			int mapIndex = GET_INT_FROM_POINTER(BLI_ghashIterator_getKey(ss->it));
-			for (i = 0; i < SL_giveNumberOfInternalFaces(f); i++, a++)
-				origindex[a] = mapIndex;
+		for (i = 0; i < ss->numFaces; i++) {
+			MPoly *poly = &ss->mpoly[i];
+			for (j = 0; j < SL_giveNumberOfInternalFaces(poly); j++, a++)
+				origindex[a] = i;
 		}
 
 		return origindex;
@@ -452,22 +288,9 @@ static void slDM_getVertCos(DerivedMesh *dm, float (*cos)[3])
 	// TODO: This is basically just like asking for the vertices. Why duplicate this functionality? Its not like it needs the performance.
 	SLDerivedMesh *ssdm = (SLDerivedMesh *) dm;
 	SLSubSurf *ss = ssdm->ss;
-	int i, index;
-	
-	i = 0;
-	for (index = 0; index < BLI_ghash_size(ss->verts); index++) {
-		SLVert *v = BLI_ghash_lookup(ss->verts, SET_INT_IN_POINTER(index)); // Not sure if i could just use the ghash iterator instead...
-		copy_v3_v3(cos[i++], v->sl_coords);
-	}
-	for (index = 0; index < BLI_ghash_size(ss->edges); index++) {
-		SLEdge *e = BLI_ghash_lookup(ss->edges, SET_INT_IN_POINTER(index));
-		copy_v3_v3(cos[i++], e->sl_coords);
-	}
-	for (index = 0; index < BLI_ghash_size(ss->faces); index++) {
-		SLFace *f = BLI_ghash_lookup(ss->faces, SET_INT_IN_POINTER(index));
-		if (f->numVerts > 3) {
-			copy_v3_v3(cos[i++], f->centroid);
-		}
+	int i;
+	for (i = 0; i < SL_giveTotalNumberOfSubVerts(ss); i++) {
+		copy_v3_v3(cos[i], ss->o_vert[i].co);
 	}
 }
 
@@ -475,7 +298,6 @@ static struct PBVH *slDM_getPBVH(Object *ob, DerivedMesh *dm)
 {
 	// TODO: I have no idea about any of this code. The grids and all that crap just seems relevant to CCG.
 	SLDerivedMesh *ssdm = (SLDerivedMesh *)dm;
-	SLSubSurf *ss = ssdm->ss;
 	
 	if (!ob) {
 		ssdm->pbvh = NULL;
@@ -505,23 +327,12 @@ static struct PBVH *slDM_getPBVH(Object *ob, DerivedMesh *dm)
 
 // OpenGL drawing stuff (self explanatory)
 static void slDM_drawVerts(DerivedMesh *dm) {
+	int i;
 	SLDerivedMesh *ssdm = (SLDerivedMesh *) dm;
 	SLSubSurf *ss = ssdm->ss;
-
 	glBegin(GL_POINTS);
-	for (BLI_ghashIterator_init(ss->it, ss->verts); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLVert *v = BLI_ghashIterator_getValue(ss->it);
-		glVertex3fv(v->sl_coords);
-	}
-	for (BLI_ghashIterator_init(ss->it, ss->edges); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLEdge *e = BLI_ghashIterator_getValue(ss->it);
-		glVertex3fv(e->sl_coords);
-	}
-	for (BLI_ghashIterator_init(ss->it, ss->faces); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLFace *f = BLI_ghashIterator_getValue(ss->it);
-		if (f->numVerts > 3) {
-			glVertex3fv(f->centroid);
-		}
+	for (i = 0; i < SL_giveTotalNumberOfSubVerts(ss); i++) {
+		glVertex3fv(ss->o_vert[i].co);
 	}
 	glEnd();
 }
@@ -529,52 +340,56 @@ static void slDM_drawVerts(DerivedMesh *dm) {
 static void slDM_drawEdges(DerivedMesh *dm, int drawLooseEdges, int drawAllEdges) {
 	SLDerivedMesh *ssdm = (SLDerivedMesh *) dm;
 	SLSubSurf *ss = ssdm->ss;
-	int i;
+	int i,j;
 
-	for (BLI_ghashIterator_init(ss->it, ss->edges); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLEdge *e = BLI_ghashIterator_getValue(ss->it);
-
-		if (!drawLooseEdges && e->numFaces == 0)
+	for (i = 0; i < ss->numEdges; i++) {
+		MEdge *e;
+		if (!drawLooseEdges && ss->edge2poly[i]->count == 0)
 			continue;
-
-		// Not sure what this means.
-		//if (!drawAllEdges && ssdm->edgeFlags && !(ssdm->edgeFlags[j] & ME_EDGEDRAW))
-		//	continue;
-
+		
+		e = &ss->medge[i];
+		
+		if (!drawAllEdges && !(e->flag & ME_EDGEDRAW))
+			continue;
+		
+		
 		// Or what aging is
 		/*if (useAging && !(G.f & G_BACKBUFSEL)) {
-			int ageCol = 255 - ccgSubSurf_getEdgeAge(ss, e) * 4;
+			i n*t ageCol = 255 - ccgSubSurf_getEdgeAge(ss, e) * 4;
 			glColor3ub(0, ageCol > 0 ? ageCol : 0, 0);
 		}*/
 
 		glBegin(GL_LINE_STRIP);
-		glVertex3fv(e->v0->sl_coords);
-		glVertex3fv(e->sl_coords);
-		glVertex3fv(e->v1->sl_coords);
+		glVertex3fv(ss->o_vert[e->v1].co);
+		glVertex3fv(ss->o_vert[ss->numVerts + i].co);
+		glVertex3fv(ss->o_vert[e->v2].co);
 		glEnd();
+
 	}
 
 	/*if (useAging && !(G.f & G_BACKBUFSEL)) {
 		glColor3ub(0, 0, 0);
 	}*/
 
-	if (/*ssdm->drawInteriorEdges*/ 1) { // TODO: Why wouldn't we?
-
-		for (BLI_ghashIterator_init(ss->it, ss->faces); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-			SLFace *f = BLI_ghashIterator_getValue(ss->it);
-
-			if (f->numVerts == 3) { // Triangles are split differently from quads and ngons
+	if (ssdm->drawInteriorEdges) {
+		for (i = 0; i < ss->numFaces ; i++) {
+			MPoly *poly = &ss->mpoly[i];
+			MLoop *loop = &ss->mloop[poly->loopstart];
+			
+			// TODO:
+			if (poly->totloop == 3) { // Triangles are split differently from quads and ngons
 				glBegin(GL_LINE_LOOP);
-				glVertex3fv(f->edges[0]->sl_coords);
-				glVertex3fv(f->edges[1]->sl_coords);
-				glVertex3fv(f->edges[2]->sl_coords);
+				glVertex3fv(ss->o_vert[loop[0].e + ss->numVerts].co);
+				glVertex3fv(ss->o_vert[loop[1].e + ss->numVerts].co);
+				glVertex3fv(ss->o_vert[loop[1].e + ss->numVerts].co);
 				glEnd();
 			}
 			else {
+				float *centroid = ss->o_vert[ss->poly2vert[i]].co;
 				glBegin(GL_LINES);
-				for (i = 0; i < f->numVerts; i++) {
-					glVertex3fv(f->centroid);
-					glVertex3fv(f->edges[i]->sl_coords);
+				for (j = 0; j < poly->totloop; j++) {
+					glVertex3fv(centroid);
+					glVertex3fv(ss->o_vert[loop[j].e + ss->numVerts].co);
 				}
 				glEnd();
 			}
@@ -583,16 +398,17 @@ static void slDM_drawEdges(DerivedMesh *dm, int drawLooseEdges, int drawAllEdges
 }
 
 static void slDM_drawLooseEdges(DerivedMesh *dm) {
+	int i;
 	SLDerivedMesh *ssdm = (SLDerivedMesh *) dm;
 	SLSubSurf *ss = ssdm->ss;
 
-	for (BLI_ghashIterator_init(ss->it, ss->edges); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLEdge *e = BLI_ghashIterator_getValue(ss->it);
-		if (e->numFaces == 0) {
+	for (i = 0; i < ss->numEdges; i++) {
+		if (ss->edge2poly[i]->count == 0) {
+			MEdge *e = &ss->medge[i];
 			glBegin(GL_LINE_STRIP);
-			glVertex3fv(e->v0->sl_coords);
-			glVertex3fv(e->sl_coords);
-			glVertex3fv(e->v1->sl_coords);
+			glVertex3fv(ss->o_vert[e->v1].co);
+			glVertex3fv(ss->o_vert[ss->numVerts + i].co);
+			glVertex3fv(ss->o_vert[e->v2].co);
 			glEnd();
 		}
 	}
@@ -623,30 +439,23 @@ static void ssDM_glNormalFast(float *a, float *b, float *c, float *d)
 	/* don't normalize, GL_NORMALIZE is enabled */
 	glNormal3fv(no);
 }
+
+#if 0
 static void slDM_drawFacesSolid(DerivedMesh *dm, float (*partial_redraw_planes)[4], int fast, DMSetMaterial setMaterial) {
 	SLDerivedMesh *ssdm = (SLDerivedMesh *) dm;
 	SLSubSurf *ss = ssdm->ss;
-	DMFlagMat *faceFlags = ssdm->faceFlags;
-	int i;
+	int i, j;
 	int drawcurrent = 0, matnr = -1, shademodel = -1;
+	
+	MVert *o_vert = ss->o_vert; // For convenience.
 
-	//CCG_key_top_level(&key, ss);
-	//ssdm_pbvh_update(ssdm);
-
-	for (BLI_ghashIterator_init(ss->it, ss->faces); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLFace *f = BLI_ghashIterator_getValue(ss->it);
-
-		int index = GET_INT_FROM_POINTER(BLI_ghashIterator_getKey(ss->it));
+	for (i = 0; i < ss->numFaces; i++) {
+		MPoly *poly = &ss->mpoly[i];
+		MLoop *loop = &ss->mloop[i];
 		int new_matnr, new_shademodel;
 
-		if (faceFlags) {
-			new_shademodel = (faceFlags[index].flag & ME_SMOOTH) ? GL_SMOOTH : GL_FLAT;
-			new_matnr = faceFlags[index].mat_nr;
-		}
-		else {
-			new_shademodel = GL_SMOOTH;
-			new_matnr = 0;
-		}
+		new_shademodel = (poly->flag & ME_SMOOTH) ? GL_SMOOTH : GL_FLAT;
+		new_matnr = poly->mat_nr;
 
 		if (shademodel != new_shademodel || matnr != new_matnr) {
 			matnr = new_matnr;
@@ -661,43 +470,99 @@ static void slDM_drawFacesSolid(DerivedMesh *dm, float (*partial_redraw_planes)[
 			continue;
 
 		// TODO: Smooth version
-		if (f->numVerts == 3) {
-			// 1x3 strip + 1 single triangle, not worth it (probably?)
-			glBegin(GL_TRIANGLES);
+		if (shademodel == GL_SMOOTH) {
+			if (poly->totloop == 3) {
+				MVert *v1 = &o_vert[loop[0].v], *v2 = &o_vert[loop[1].v], *v3 = &o_vert[loop[2].v];
+				MVert *e1 = &o_vert[loop[0].e + ss->numVerts], 
+					  *e2 = &o_vert[loop[1].v + ss->numVerts],
+					  *e3 = &o_vert[loop[2].v + ss->numVerts];
 
-			ssDM_glNormalFastTri(f->verts[0]->sl_coords, f->edges[0]->sl_coords, f->edges[2]->sl_coords);
-			glVertex3fv(f->verts[0]->sl_coords);
-			glVertex3fv(f->edges[0]->sl_coords);
-			glVertex3fv(f->edges[2]->sl_coords);
-
-			ssDM_glNormalFastTri(f->verts[1]->sl_coords, f->edges[1]->sl_coords, f->edges[0]->sl_coords);
-			glVertex3fv(f->verts[1]->sl_coords);
-			glVertex3fv(f->edges[1]->sl_coords);
-			glVertex3fv(f->edges[0]->sl_coords);
-
-			ssDM_glNormalFastTri(f->verts[2]->sl_coords, f->edges[2]->sl_coords, f->edges[1]->sl_coords);
-			glVertex3fv(f->verts[2]->sl_coords);
-			glVertex3fv(f->edges[2]->sl_coords);
-			glVertex3fv(f->edges[1]->sl_coords);
-
-			ssDM_glNormalFastTri(f->verts[0]->sl_coords, f->edges[1]->sl_coords, f->edges[2]->sl_coords);
-			glVertex3fv(f->edges[0]->sl_coords);
-			glVertex3fv(f->edges[1]->sl_coords);
-			glVertex3fv(f->edges[2]->sl_coords);
-			glEnd();
-		} else {
-			glBegin(GL_QUADS);
-			for (i = 0; i < f->numVerts; i++) {
-				ssDM_glNormalFast(f->verts[i]->sl_coords, f->edges[i]->sl_coords, f->centroid, f->edges[(i - 1 + f->numVerts) % f->numVerts]->sl_coords);
-				glVertex3fv(f->verts[i]->sl_coords);
-				glVertex3fv(f->edges[i]->sl_coords);
-				glVertex3fv(f->centroid);
-				glVertex3fv(f->edges[(i + f->numVerts - 1) % f->numVerts]->sl_coords);
+				// 1x3 strip + 1 single triangle, not worth it (probably?)
+				glBegin(GL_TRIANGLES);
+				glNormal3fv(v1->no);glVertex3fv(v1->co);
+				glNormal3fv(e1->no);glVertex3fv(e1->co);
+				glNormal3fv(e3->no);glVertex3fv(e3->co);
+				
+				glNormal3fv(v2->no);glVertex3fv(v2->co);
+				glNormal3fv(e2->no);glVertex3fv(e2->co);
+				glNormal3fv(e1->no);glVertex3fv(e1->co);
+				
+				glNormal3fv(v3->no);glVertex3fv(v3->co);
+				glNormal3fv(e3->no);glVertex3fv(e3->co);
+				glNormal3fv(e2->no);glVertex3fv(e2->co);
+				
+				glNormal3fv(e1->no);glVertex3fv(e1->co);
+				glNormal3fv(e2->no);glVertex3fv(e2->co);
+				glNormal3fv(e3->no);glVertex3fv(e3->co);
+				glEnd();
+			} else {
+				MVert *p = &o_vert[ss->poly2vert[i]];
+				glBegin(GL_QUADS);
+				for (j = 0; j < poly->totloop; j++) {
+					int prevJ = (j + poly->totloop - 1) % poly->totloop;
+					MVert *vj = &o_vert[loop[j].v];
+					MVert *ej = &o_vert[loop[j].e + ss->numVerts];
+					MVert *eprevJ = &o_vert[loop[prevJ].e + ss->numVerts];
+					
+					glNormal3fv(vj->no);glVertex3fv(vj->co);
+					glNormal3fv(ej->no);glVertex3fv(ej->co);
+					glNormal3fv(p->no);glVertex3fv(p->co);
+					glNormal3fv(eprevJ->no);glVertex3fv(eprevJ->co);
+				}
+				glEnd();
 			}
-			glEnd();
+		}
+		else {
+			if (poly->totloop == 3) {
+				MVert *v1 = &o_vert[loop[0].v], *v2 = &o_vert[loop[1].v], *v3 = &o_vert[loop[2].v];
+				MVert *e1 = &o_vert[loop[0].e + ss->numVerts], 
+						*e2 = &o_vert[loop[1].v + ss->numVerts],
+						*e3 = &o_vert[loop[2].v + ss->numVerts];
+				
+				// 1x3 strip + 1 single triangle, not worth it (probably?)
+				glBegin(GL_TRIANGLES);
+
+				ssDM_glNormalFastTri(v1->co, e1->co, e3->co);
+				glVertex3fv(v1->co);
+				glVertex3fv(e1->co);
+				glVertex3fv(e3->co);
+
+				ssDM_glNormalFastTri(v2->co,e2->co, e1->co);
+				glVertex3fv(v2->co);
+				glVertex3fv(e2->co);
+				glVertex3fv(e1->co);
+
+				ssDM_glNormalFastTri(v3->co, e3->co, e2->co);
+				glVertex3fv(v3->co);
+				glVertex3fv(e3->co);
+				glVertex3fv(e2->co);
+
+				ssDM_glNormalFastTri(e1->co, e2->co, e3->co);
+				glVertex3fv(e1->co);
+				glVertex3fv(e2->co);
+				glVertex3fv(e3->co);
+				glEnd();
+			} else {
+				MVert *p = &o_vert[ss->poly2vert[i]];
+				glBegin(GL_QUADS);
+				for (j = 0; j < poly->totloop; j++) {
+					int prevJ = (j + poly->totloop - 1) % poly->totloop;
+					MVert *vj = &o_vert[loop[j].v];
+					MVert *ej = &o_vert[loop[j].e + ss->numVerts];
+					MVert *eprevJ = &o_vert[loop[prevJ].e + ss->numVerts];
+
+					ssDM_glNormalFast(vj->co, ej->co, p->co, eprevJ->co);
+					glVertex3fv(vj->co);
+					glVertex3fv(ej->co);
+					glVertex3fv(p->co);
+					glVertex3fv(eprevJ->co);
+				}
+				glEnd();
+			}
 		}
 	}
 }
+#endif
 
 static void slDM_drawFacesTex(DerivedMesh *dm,
 							  DMSetDrawOptionsTex setDrawOptions,
@@ -720,6 +585,7 @@ static void slDM_drawMappedFacesGLSL(DerivedMesh *dm,
 	printf("slDM_drawMappedFacesGLSL\n");
 }
 
+#if 0
 static void slDM_drawMappedFaces(DerivedMesh *dm,
 								 DMSetDrawOptions setDrawOptions,
 								 DMSetMaterial setMaterial,
@@ -729,13 +595,10 @@ static void slDM_drawMappedFaces(DerivedMesh *dm,
 	SLDerivedMesh *ssdm = (SLDerivedMesh *) dm;
 	SLSubSurf *ss = ssdm->ss;
 	MCol *mcol = NULL;
-	DMFlagMat *faceFlags = ssdm->faceFlags;
 	int useColors = flag & DM_DRAW_USE_COLORS;
-	int i, drawSmooth;
+	int i, j, drawSmooth;
 	
-	//CCG_key_top_level(&key, ss);
-	
-	/* currently unused -- each original face is handled separately */
+	// currently unused -- each original face is handled separately
 	(void)compareDrawOptions;
 	
 	if (useColors) {
@@ -745,28 +608,20 @@ static void slDM_drawMappedFaces(DerivedMesh *dm,
 	}
 	
 	
-	for (BLI_ghashIterator_init(ss->it, ss->faces); !BLI_ghashIterator_isDone(ss->it); BLI_ghashIterator_step(ss->it)) {
-		SLFace *f = BLI_ghashIterator_getValue(ss->it);
-		int origIndex = GET_INT_FROM_POINTER(BLI_ghashIterator_getKey(ss->it));
+	for (i = 0; i < ss->numFaces; i++) {
+		MPoly *poly = &ss->mpoly[i];
 		unsigned char *cp = NULL;
 
-		if (flag & DM_DRAW_ALWAYS_SMOOTH) drawSmooth = 1;
-		else if (faceFlags) drawSmooth = (faceFlags[origIndex].flag & ME_SMOOTH);
-		else drawSmooth = 1;
+		drawSmooth = (flag & DM_DRAW_ALWAYS_SMOOTH) || poly->flag & ME_SMOOTH;
 		
 		if (mcol) {
 			cp = (unsigned char *)mcol;
-			mcol += f->numVerts * 4; // 4 is used for what?
+			mcol += poly->totloop * 4; // 4 is used for what?
 		}
 		
 		{
 			DMDrawOption draw_option = DM_DRAW_OPTION_NORMAL;
-			
-			// I don't even know what this mysterious "index" is supposed to be. There is only ONE index.
-			//if (index == ORIGINDEX_NONE)
-				draw_option = setMaterial(faceFlags ? faceFlags[origIndex].mat_nr + 1 : 1, NULL);  /* XXX, no faceFlags no material */
-			//else if (setDrawOptions)
-			//	draw_option = setDrawOptions(userData, index);
+			draw_option = setMaterial(poly->mat_nr, NULL);
 				
 			if (draw_option != DM_DRAW_OPTION_SKIP) {
 				if (draw_option == DM_DRAW_OPTION_STIPPLE) {
@@ -777,7 +632,9 @@ static void slDM_drawMappedFaces(DerivedMesh *dm,
 				/* no need to set shading mode to flat because
 				 *  normals are already used to change shading */
 				glShadeModel(GL_SMOOTH);
-				if (f->numVerts == 3) {
+				if (poly->totloop == 3) {
+					int ev1, ev2, ev3;
+					
 					glBegin(GL_TRIANGLES);
 					ssDM_glNormalFastTri(f->verts[0]->sl_coords, f->edges[0]->sl_coords, f->edges[2]->sl_coords);
 					glVertex3fv(f->verts[0]->sl_coords);
@@ -801,12 +658,12 @@ static void slDM_drawMappedFaces(DerivedMesh *dm,
 					glEnd();
 				} else {
 					glBegin(GL_QUADS);
-					for (i = 0; i < f->numVerts; i++) {
-						ssDM_glNormalFast(f->verts[i]->sl_coords, f->edges[i]->sl_coords, f->centroid, f->edges[(i - 1 + f->numVerts) % f->numVerts]->sl_coords);
-						glVertex3fv(f->verts[i]->sl_coords);
-						glVertex3fv(f->edges[i]->sl_coords);
+					for (j = 0; j < poly->totloop; j++) {
+						ssDM_glNormalFast(f->verts[j]->sl_coords, f->edges[j]->sl_coords, f->centroid, f->edges[(j - 1 + f->numVerts) % f->numVerts]->sl_coords);
+						glVertex3fv(f->verts[j]->sl_coords);
+						glVertex3fv(f->edges[j]->sl_coords);
 						glVertex3fv(f->centroid);
-						glVertex3fv(f->edges[(i + f->numVerts - 1) % f->numVerts]->sl_coords);
+						glVertex3fv(f->edges[(j + f->numVerts - 1) % f->numVerts]->sl_coords);
 					}
 					glEnd();
 				}
@@ -816,6 +673,7 @@ static void slDM_drawMappedFaces(DerivedMesh *dm,
 		}
 	}
 }
+#endif
 
 static void slDM_drawMappedFacesTex(DerivedMesh *dm,
 									DMSetDrawOptions setDrawOptions,
@@ -862,16 +720,14 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 {
 	SLDerivedMesh *ssdm = MEM_callocN(sizeof(*ssdm), "sldm");
 	DerivedMesh *newdm;
-	int totvert, totedge, totface;
 	int totsubvert, totsubedge, totsubface, totsubloop;
 	int numTex, numCol;
 	int hasPCol, hasOrigSpace;
-	int gridInternalEdges;
 	int *polyidx;
 	int i;
 
 	ssdm->ss = ss;
-	//ssdm->drawInteriorEdges = drawInteriorEdges;
+	ssdm->drawInteriorEdges = drawInteriorEdges;
 	//ssdm->useSubsurfUv = useSubsurfUv;
 	newdm = &(ssdm->dm);
 	for (i = 0; i < sizeof(newdm); i++) {
@@ -879,10 +735,6 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 	}
 
 	//DM_init_funcs(newdm); // Sets some default functions we don't care/need to overload.
-
-	totvert = ss->numVerts;
-	totedge = ss->numEdges;
-	totface = ss->numFaces;
 
 	totsubvert = SL_giveTotalNumberOfSubVerts(ss);
 	totsubedge = SL_giveTotalNumberOfSubEdges(ss);
@@ -921,8 +773,6 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 								   NULL, totsubface);
 	for (i = 0; i < totsubface; i++) polyidx[i] = i; // TODO: Check this, i think its OK. (it should just be 1 face per poly)
 
-	ssdm->faceFlags = MEM_callocN(sizeof(DMFlagMat) * totface, "faceFlags");
-
 	// These functions are straight forward...
 	newdm->getMinMax = slDM_getMinMax;
 	newdm->getNumVerts = slDM_getNumVerts;
@@ -939,7 +789,7 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 	newdm->getVertCo = NULL;
 	newdm->getVertNo = NULL;
 
-	newdm->copyVertArray = slDM_copyFinalVertArray;
+	//newdm->copyVertArray = ; // TODO
 	newdm->copyEdgeArray = slDM_copyFinalEdgeArray;
 	newdm->copyLoopArray = slDM_copyFinalLoopArray;
 	newdm->copyPolyArray = slDM_copyFinalPolyArray;
@@ -982,10 +832,10 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 	newdm->drawVerts = slDM_drawVerts;
 	newdm->drawEdges = slDM_drawEdges;
 	newdm->drawLooseEdges = slDM_drawLooseEdges;
-	newdm->drawFacesSolid = slDM_drawFacesSolid;
+	//newdm->drawFacesSolid = slDM_drawFacesSolid;
 	newdm->drawFacesTex = slDM_drawFacesTex;
 	newdm->drawFacesGLSL = slDM_drawFacesGLSL;
-	newdm->drawMappedFaces = slDM_drawMappedFaces;
+	//newdm->drawMappedFaces = slDM_drawMappedFaces;
 	newdm->drawMappedFacesTex = slDM_drawMappedFacesTex;
 	newdm->drawMappedFacesGLSL = slDM_drawMappedFacesGLSL;
 	newdm->drawMappedFacesMat = slDM_drawMappedFacesMat;
@@ -1010,3 +860,4 @@ static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
 	newdm->dirty &= ~DM_DIRTY_TESS_CDLAYERS;
 	return ssdm;
 }
+#endif

@@ -19,16 +19,9 @@ typedef struct MEdge MEdge;
 typedef struct MLoop MLoop;
 typedef struct MPoly MPoly;
 typedef struct MFace MFace;
-typedef struct DMFlagMat DMFlagMat;
-typedef struct MemArena MemArena;
-typedef struct GHash GHash;
-typedef struct GHashIterator GHashIterator;
-typedef struct LinkNode LinkNode;
-
+typedef struct MeshElemMap MeshElemMap;
+typedef struct DerivedMesh DerivedMesh;
 typedef struct SLSubSurf SLSubSurf;
-typedef struct SLFace SLFace;
-typedef struct SLEdge SLEdge;
-typedef struct SLVert SLVert;
 
 /**
  * \file LSSurf.h
@@ -36,71 +29,47 @@ typedef struct SLVert SLVert;
  * Only subdivides 1 level!
  */
 
-
-struct SLVert {
-	int newVertIdx; // Not sure if necessary (numbering is predictable)
-
-    float coords[3]; // Initial coordinate
-
-    LinkNode *edges;
-    LinkNode *faces;
-    unsigned short numEdges, numFaces;
-
-    unsigned short requiresUpdate, seam;
-
-	float sl_coords[3]; // Smoothed position
-	float normal[3];
-};
-
-struct SLEdge {
-	// Meta-index. Starts from 0 for the first edge, which contains the first 2 subedges.
-	int newMetaIdx; // Not sure if necessary (numbering is predictable)
-
-    SLVert *v0, *v1;
-    LinkNode *faces;
-    unsigned short numFaces;
-    unsigned short requiresUpdate;
-
-    float sharpness;
-
-    float centroid[3];
-	
-	float sl_coords[3]; // Smoothing center node position
-	float normal[3];
-};
-
-struct SLFace {
-	// New indices are given for original verts, edge nodes, then face nodes (some faces have no new node)
-    int newVertIdx; // (unused for triangles)
-	int newEdgeStartIdx;
-
-    SLVert **verts;
-    SLEdge **edges;
-    unsigned short numVerts; // note: numVerts same as numEdges
-    unsigned short requiresUpdate;
-
-    float centroid[3];
-	
-	float normal[3];
-};
-
 struct SLSubSurf {
-    MemArena *memArena;
-
     int smoothing; // Boolean, nonzero for smoothing.
-
-    GHash *verts, *edges, *faces;
- 	GHashIterator *it;
 
     int numVerts;
     int numEdges;
     int numFaces;
+
+	// If dm changes (fundamentally) the entire SLSubSurf should be removed and recreated.
+	DerivedMesh *input;
+	float (*vertexCos)[3]; // Vertex coordinates.
+	// For convenience
+	MVert *mvert;
+	MEdge *medge;
+	MLoop *mloop;
+	MPoly *mpoly;
+
+	// The subdivided, smoothed, output mesh.
+	MVert *o_vert;
+	MEdge *o_edge;
+	MLoop *o_loop;
+	MPoly *o_poly;
+	// We need to complement the output from M*** structs.
+	float (*no)[3]; // Store normals in float format as well.
+	float (*eco)[3]; // Store interpolated edge coordinate.
+	// eco could be removed is the only the input coordinates are used (but its more tedious to implement)
+
+	// Maps necessary for quick access to the smoothing part
+	// (TODO: it is possible that this could be performed without these, but its much simpler with them).
+	int *poly2vert; // Maps old faces to new vert indices.
+	MeshElemMap *edge2poly;
+	int *edge2poly_mem;
+	MeshElemMap *vert2poly;
+	int *vert2poly_mem;
+	MeshElemMap *vert2edge;
+	int *vert2edge_mem;
 };
 
-int SL_giveNumberOfInternalFaces(SLFace *face);
-int SL_giveNumberOfInternalNodes(SLFace *face);
-int SL_giveNumberOfInternalEdges(SLFace *face);
-int SL_giveNumberOfInternalLoops(SLFace *face);
+int SL_giveNumberOfInternalFaces(MPoly *poly);
+int SL_giveNumberOfInternalNodes(MPoly *poly);
+int SL_giveNumberOfInternalEdges(MPoly *poly);
+int SL_giveNumberOfInternalLoops(MPoly *poly);
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
@@ -109,23 +78,14 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss);
 
 // Methods for obtaining the loops and edges internal to the face. Uses the newIdx variables for numbering.
 // Sufficient memory should be allocated by caller. Returns number of loops for sub face (will always be 3 or 4)
-void SL_copyNewPolys(SLSubSurf *ss, DMFlagMat *faceFlags, MPoly *mpolys);
+void SL_copyNewPolys(SLSubSurf *ss, MPoly *mpolys);
 void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops);
 void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges);
-void SL_copyNewVerts(SLSubSurf *ss, MVert *mverts);
-void SL_copyNewTessFaces(SLSubSurf *ss, DMFlagMat *faceFlags, MFace *mfaces);
-
-SLSubSurf* SL_SubSurf_new(int smoothing);
-void SL_SubSurf_free(SLSubSurf *ss);
-
-void SL_addVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
-void SL_addEdge(SLSubSurf *ss, void* hashkey, void *vertkey0, void *vertkey1, float sharpness);
-void SL_addFace(SLSubSurf *ss, void* hashkey, int numVerts, void **vertkeys);
-// Updates coordinate or sharpness in existing vert/edge
-void SL_updateVert(SLSubSurf *ss, void* hashkey, float coords[3], int seam);
-void SL_updateEdge(SLSubSurf *ss, void* hashkey, float sharpness);
+void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces);
 
 void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]);
 
+SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
+DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss);
+void SL_SubSurf_free(SLSubSurf *ss);
 void SL_processSync(SLSubSurf *ss);
-void SL_renumberAll(SLSubSurf *ss);
