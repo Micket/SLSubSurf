@@ -73,12 +73,6 @@
 
 extern GLubyte stipple_quarttone[128]; /* glutil.c, bad level data */
 
-typedef struct SLDerivedMesh {
-	DerivedMesh dm; // Output derived mesh.
-	SLSubSurf *ss;
-	int drawInteriorEdges;
-} SLDerivedMesh;
-
 /*
  * Entrypoint for modifier. Should return the output DM based on the input DM.
  */
@@ -91,7 +85,6 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	SLSubSurf *ss;
 	int levels;
 	int smoothing = smd->subdivType == ME_SL_SUBSURF;
-	//SLFlags useAging = smd->flags & eSubsurfModifierFlag_DebugIncr ? CCG_USE_AGING : 0;
 	int useSubsurfUv = smd->flags & eSubsurfModifierFlag_SubsurfUv;
 	int drawInteriorEdges = !(smd->flags & eSubsurfModifierFlag_ControlEdges);
 	DerivedMesh *result;
@@ -118,6 +111,7 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	ss = SL_SubSurf_new(smoothing, input, vertCos);
 	result = SL_SubSurf_constructOutput(ss);
 	SL_processSync(ss); // Actually computes coordinates and such.
+	result->calcNormals(result);
 	// TODO: NOW WE LEAK MEMORY! FIXME FIXME FIXME Need to use the SLDerivedMesh and overload the release function
 	return result;
 }
@@ -140,33 +134,6 @@ static int slDM_getNumPolys(DerivedMesh *dm) { return dm->numPolyData; }
 static int slDM_getNumTessFaces(DerivedMesh *dm) { return dm->numTessFaceData; }
 
 // Copy stuff
-/*static void slDM_copyFinalVertArray(DerivedMesh *dm, MVert *mvert) {
-	int i;
-	SLSubSurf *ss = ((SLDerivedMesh*)dm)->ss;
-	MVert *overt = ss->o_vert;
-	for (i = 0; i < SL_giveTotalNumberOfSubVerts(ss); i++) {
-		mvert[i].bweight = overt[i].bweight;
-		mvert[i].flag = overt[i].flag;
-		copy_v3_v3(mvert[i].co = overt[i].co);
-		copy_v3_v3_short(mvert[i].no = overt[i].no);
-	}
-}*/
-static void slDM_copyFinalEdgeArray(DerivedMesh *dm, MEdge *medge) {
-	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	SL_copyNewEdges(sldm->ss, medge);
-}
-static void slDM_copyFinalLoopArray(DerivedMesh *dm, MLoop *mloop) {
-	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	SL_copyNewLoops(sldm->ss, mloop);
-}
-static void slDM_copyFinalPolyArray(DerivedMesh *dm, MPoly *mpoly) {
-	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	SL_copyNewPolys(sldm->ss, mpoly);
-}
-static void slDM_copyFinalTessFaceArray(DerivedMesh *dm, MFace *mface) {
-	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	SL_copyNewTessFaces(sldm->ss, mface);
-}
 
 // Unsure about these three
 static void *slDM_get_vert_data_layer(DerivedMesh *dm, int type) {
@@ -564,27 +531,6 @@ static void slDM_drawFacesSolid(DerivedMesh *dm, float (*partial_redraw_planes)[
 }
 #endif
 
-static void slDM_drawFacesTex(DerivedMesh *dm,
-							  DMSetDrawOptionsTex setDrawOptions,
-							  DMCompareDrawOptions compareDrawOptions,
-							  void *userData) {
-	// TODO
-	printf("slDM_drawFacesTex\n");
-}
-
-static void slDM_drawFacesGLSL(DerivedMesh *dm, DMSetMaterial setMaterial) {
-	// TODO
-	printf("slDM_drawFacesGLSL\n");
-}
-
-static void slDM_drawMappedFacesGLSL(DerivedMesh *dm,
-									 DMSetMaterial setMaterial,
-									 DMSetDrawOptions setDrawOptions,
-									 void *userData) {
-	// TODO
-	printf("slDM_drawMappedFacesGLSL\n");
-}
-
 #if 0
 static void slDM_drawMappedFaces(DerivedMesh *dm,
 								 DMSetDrawOptions setDrawOptions,
@@ -675,41 +621,6 @@ static void slDM_drawMappedFaces(DerivedMesh *dm,
 }
 #endif
 
-static void slDM_drawMappedFacesTex(DerivedMesh *dm,
-									DMSetDrawOptions setDrawOptions,
-									DMCompareDrawOptions compareDrawOptions,
-									void *userData) {
-	// TODO
-	printf("slDM_drawMappedFacesTex\n");
-}
-
-/* Only used by non-editmesh types */
-static void slDM_drawMappedFacesMat(DerivedMesh *dm,
-									void (*setMaterial)(void *userData, int, void *attribs),
-									int (*setFace)(void *userData, int index), void *userData) {
-	// TODO
-	printf("slDM_drawMappedFacesMat\n");
-}
-
-static void slDM_drawUVEdges(DerivedMesh *dm) {
-	// TODO
-	printf("slDM_drawUVEdges\n");
-}
-
-static void slDM_drawMappedEdgesInterp(DerivedMesh *dm,
-									   DMSetDrawOptions setDrawOptions,
-									   DMSetDrawInterpOptions setDrawInterpOptions,
-									   void *userData) {
-	// TODO
-	printf("slDM_drawMappedEdgesInterp\n");
-}
-
-static void slDM_drawMappedEdges(DerivedMesh *dm,
-								 DMSetDrawOptions setDrawOptions,
-								 void *userData) {
-	// TODO
-	printf("slDM_drawMappedEdges\n");
-}
 
 // End of drawing functions
 

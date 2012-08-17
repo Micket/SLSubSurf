@@ -23,9 +23,18 @@ typedef struct MeshElemMap MeshElemMap;
 typedef struct DerivedMesh DerivedMesh;
 typedef struct SLSubSurf SLSubSurf;
 
+/// The output DM for the Stam/Loop subdivision modifier.
+/*typedef struct SLDerivedMesh {
+	DerivedMesh dm; // Output derived mesh.
+	SLSubSurf *ss;
+	int drawInteriorEdges;
+} SLDerivedMesh;*/
+
+
 /**
  * \file LSSurf.h
- * This code implements a basic Stam/Loop subdivision surface
+ * This code implements a basic subdivision surface with triangle -> 4 * triangle, ngons -> n * quads.
+ * Named after Stam/Loop, but many possible smoothing schemes exist.
  * Only subdivides 1 level!
  */
 
@@ -50,9 +59,7 @@ struct SLSubSurf {
 	MEdge *o_edge;
 	MLoop *o_loop;
 	MPoly *o_poly;
-	// We need to complement the output from M*** structs.
-	float (*no)[3]; // Store normals in float format as well.
-	float (*eco)[3]; // Store interpolated edge coordinate.
+	float (*eco)[3]; // Store interpolated edge coordinate. Much easier using this.
 	// eco could be removed is the only the input coordinates are used (but its more tedious to implement)
 
 	// Maps necessary for quick access to the smoothing part
