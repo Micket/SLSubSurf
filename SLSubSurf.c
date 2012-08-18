@@ -303,31 +303,6 @@ static float  *_origCoord(SLSubSurf *ss, int vert) {
 	return ss->vertexCos ? ss->vertexCos[vert] : ss->mvert[vert].co;
 }
 
-
-// This can be done faster than the default implementation in CDDerivedMesh, but its just 1 subdivision level
-static void _minmax_v3_v3v3(const float vec[3], float min[3], float max[3])
-{
-	if (min[0] > vec[0]) min[0] = vec[0];
-	if (min[1] > vec[1]) min[1] = vec[1];
-	if (min[2] > vec[2]) min[2] = vec[2];
-	if (max[0] < vec[0]) max[0] = vec[0];
-	if (max[1] < vec[1]) max[1] = vec[1];
-	if (max[2] < vec[2]) max[2] = vec[2];
-}
-
-void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]) {
-	int i;
-	if (ss->numVerts == 0) {
-		zero_v3(min_r);
-		zero_v3(max_r);
-		return;
-	}
-
-	for(i = 0; i < ss->numVerts; i++) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
-		_minmax_v3_v3v3(_origCoord(ss, i), min_r, max_r);
-	}
-}
-
 /////////////////////////////////////////////////////////////
 
 SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
@@ -365,6 +340,34 @@ SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[
 	return ss;
 }
 
+// HACK: Copied from cdderivedmesh.c. I want to use the goodies from CDDM, but i need to allocate memory to fit the SLSurfSurf into the structure as well.
+// This is one of the many things that beg to be upgraded to C++ and proper OO
+typedef struct {
+	DerivedMesh dm;
+	
+	/* these point to data in the DerivedMesh custom data layers,
+	 * they are only here for efficiency and convenience **/
+	MVert *mvert;
+	MEdge *medge;
+	MFace *mface;
+	MLoop *mloop;
+	MPoly *mpoly;
+	
+	/* Cached */
+	struct PBVH *pbvh;
+	int pbvh_draw;
+	
+	/* Mesh connectivity */
+	MeshElemMap *pmap;
+	int *pmap_mem;
+} CDDerivedMesh;
+
+struct SLDerivedMesh {
+	CDDerivedMesh cddm; // Output derived mesh.
+	SLSubSurf *ss;
+	int drawInteriorEdges; // is it worth the bother? I'm not going to repeat everything in CDDM for this.
+};
+
 void SL_SubSurf_free(SLSubSurf *ss) {
 	MEM_freeN(ss->poly2vert);
 	MEM_freeN(ss->vert2poly);
@@ -379,12 +382,45 @@ void SL_SubSurf_free(SLSubSurf *ss) {
 	MEM_freeN(ss);
 }
 
-/*
+// A few fucntions that should be replaced from the CDDM default functions;
 static void slDM_release(DerivedMesh *dm) {
-	//SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	if (DM_release(dm)) { // Just doing what CCG code does...
+	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
+	CDDerivedMesh *cddm = (CDDerivedMesh *)dm;
+	
+	if (DM_release(dm)) {
+		if (cddm->pmap) MEM_freeN(cddm->pmap);
+		if (cddm->pmap_mem) MEM_freeN(cddm->pmap_mem);
+		
 		SL_SubSurf_free(sldm->ss);
 		MEM_freeN(sldm);
+	}
+}
+
+static void slDM_recalcTessellation(DerivedMesh *UNUSED(dm)) { /* Nothing to do */ }
+
+
+// Not sure what the bounding box should account for, both original and refined mesh makes some sense.
+// This can be done faster than the default implementation in CDDerivedMesh, but its just 1 subdivision level
+/*
+static void _minmax_v3_v3v3(const float vec[3], float min[3], float max[3]) {
+	if (min[0] > vec[0]) min[0] = vec[0];
+	if (min[1] > vec[1]) min[1] = vec[1];
+	if (min[2] > vec[2]) min[2] = vec[2];
+	if (max[0] < vec[0]) max[0] = vec[0];
+	if (max[1] < vec[1]) max[1] = vec[1];
+	if (max[2] < vec[2]) max[2] = vec[2];
+}
+static void slDM_getMinMax(DerivedMesh *dm, float min_r[3], float max_r[3]) {
+	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
+	SLSubSurf *ss = sldm->ss;
+	int i;
+	if (ss->numVerts == 0) {
+		zero_v3(min_r);
+		zero_v3(max_r);
+		return;
+	}
+	for(i = 0; i < ss->numVerts; i++) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
+		_minmax_v3_v3v3(_origCoord(ss, i), min_r, max_r);
 	}
 }
 */
@@ -392,24 +428,67 @@ static void slDM_release(DerivedMesh *dm) {
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	int numVerts, numEdges, numFaces, numLoops;
 	int i, j, a, *polyidx, *input_index, *output_index;
-	DerivedMesh *output;
+	SLDerivedMesh *output;
+	DerivedMesh *output_dm;
 
 	numVerts = SL_giveTotalNumberOfSubVerts(ss);
 	numEdges = SL_giveTotalNumberOfSubEdges(ss);
 	numFaces = SL_giveTotalNumberOfSubFaces(ss);
 	numLoops = SL_giveTotalNumberOfSubLoops(ss);
 	// Outside is responsible for freeing this memory.
-	output = CDDM_from_template(ss->input, numVerts, numEdges, numFaces, numLoops, numFaces);
+	//output = CDDM_from_template(ss->input, numVerts, numEdges, numFaces, numLoops, numFaces);
+	// TODO: Had to duplicate entire template function just to change the cdDM_create command.
+	output = MEM_callocN(sizeof(*output), "SLDM output");
+	output->ss = ss;
+	output_dm = &output->cddm.dm;
+	CDDM_init_funcs(output_dm);
 	
-	// TODO: Replace *some* functions from default CDDM, perhaps? 	
+	// TODO: Start of what should be in CDDM_from_template
+	//CDDM_from_template(ss->input, output, numVerts, numEdges, numFaces, numLoops, numFaces);
+	/* ensure these are created if they are made on demand */
+	ss->input->getVertDataArray(ss->input, CD_ORIGINDEX);
+	ss->input->getEdgeDataArray(ss->input, CD_ORIGINDEX);
+	ss->input->getTessFaceDataArray(ss->input, CD_ORIGINDEX);
+	
+	/* this does a copy of all non mvert/medge/mface layers */
+	DM_from_template(output_dm, ss->input, DM_TYPE_CDDM, numVerts, numEdges, numFaces, numLoops, numFaces);
+	
+	/* now add mvert/medge/mface layers */
+	CustomData_add_layer(&output_dm->vertData, CD_MVERT, CD_CALLOC, NULL, numVerts);
+	CustomData_add_layer(&output_dm->edgeData, CD_MEDGE, CD_CALLOC, NULL, numEdges);
+	CustomData_add_layer(&output_dm->faceData, CD_MFACE, CD_CALLOC, NULL, numFaces);
+	CustomData_add_layer(&output_dm->loopData, CD_MLOOP, CD_CALLOC, NULL, numLoops);
+	CustomData_add_layer(&output_dm->polyData, CD_MPOLY, CD_CALLOC, NULL, numFaces);
+	
+	if (!CustomData_get_layer(&output_dm->vertData, CD_ORIGINDEX))
+		CustomData_add_layer(&output_dm->vertData, CD_ORIGINDEX, CD_CALLOC, NULL, numVerts);
+	if (!CustomData_get_layer(&output_dm->edgeData, CD_ORIGINDEX))
+		CustomData_add_layer(&output_dm->edgeData, CD_ORIGINDEX, CD_CALLOC, NULL, numEdges);
+	if (!CustomData_get_layer(&output_dm->faceData, CD_ORIGINDEX))
+		CustomData_add_layer(&output_dm->faceData, CD_ORIGINDEX, CD_CALLOC, NULL, numFaces);
+	if (!CustomData_get_layer(&output_dm->faceData, CD_POLYINDEX))
+		CustomData_add_layer(&output_dm->faceData, CD_POLYINDEX, CD_CALLOC, NULL, numFaces);
+	
+	output->cddm.mvert = CustomData_get_layer(&output_dm->vertData, CD_MVERT);
+	output->cddm.medge = CustomData_get_layer(&output_dm->edgeData, CD_MEDGE);
+	output->cddm.mface = CustomData_get_layer(&output_dm->faceData, CD_MFACE);
+	output->cddm.mloop = CustomData_get_layer(&output_dm->loopData, CD_MLOOP);
+	output->cddm.mpoly = CustomData_get_layer(&output_dm->polyData, CD_MPOLY);
+	// End of CDDM_from_template copy	
+	
+	// Replace some functions from CDDM
+	output_dm->recalcTessellation = slDM_recalcTessellation;
+	output_dm->release = slDM_release;
+	// TODO: Replace any other functions from default CDDM, perhaps?
+	
 	// This was done in in the CCG code, so i suppose I'll use that as well.
-	CustomData_free_layer_active(&output->polyData, CD_NORMAL, output->numPolyData);
+	CustomData_free_layer_active(&output_dm->polyData, CD_NORMAL, output_dm->numPolyData);
 	
 	// Convenience. Directly access these.
-	ss->o_vert = CDDM_get_verts(output);
-	ss->o_edge = CDDM_get_edges(output);
-	ss->o_loop = CDDM_get_loops(output);
-	ss->o_poly = CDDM_get_polys(output);
+	ss->o_vert = CDDM_get_verts(output_dm);
+	ss->o_edge = CDDM_get_edges(output_dm);
+	ss->o_loop = CDDM_get_loops(output_dm);
+	ss->o_poly = CDDM_get_polys(output_dm);
 
 	// Face centroids aren't moved during smoothing (by any algorithm i've seen), but edge centroids do. 
 	// When computing the smoothing part, we need to keep track of both, so we can't use o_vert->co directly.
@@ -419,17 +498,17 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	SL_copyNewPolys(ss, ss->o_poly);
 	SL_copyNewLoops(ss, ss->o_loop);
 	SL_copyNewEdges(ss, ss->o_edge);
-	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output)); // We don't need the faces for anything.
+	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output_dm)); // We don't need the faces for anything.
 	// TODO: Will probably need some other info copied over from here 
 	
 	// Other data we must fill;
 	/* We absolutely need that layer, else it's no valid tessellated data! */
-	polyidx = CustomData_get_layer(&output->faceData, CD_POLYINDEX);
+	polyidx = CustomData_get_layer(&output_dm->faceData, CD_POLYINDEX);
 	for (i = 0; i < numFaces; i++) polyidx[i] = i; // TODO: Check this, i think its OK. (it should just be 1 face per poly)
 
 	// ORIGININDEX vertex;
 	input_index = ss->input->getVertDataArray(ss->input, CD_ORIGINDEX);
-	output_index = CustomData_get_layer(&output->vertData, CD_ORIGINDEX);
+	output_index = CustomData_get_layer(&output_dm->vertData, CD_ORIGINDEX);
 	// original vertices are at the beginning
 	for (i = 0; i < ss->numVerts; i++) {
 		output_index[i] = input_index ? input_index[i] : i;
@@ -440,7 +519,7 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	}
 	// ORIGININDEX edge;
 	input_index = ss->input->getEdgeDataArray(ss->input, CD_ORIGINDEX);
-	output_index = CustomData_get_layer(&output->edgeData, CD_ORIGINDEX);
+	output_index = CustomData_get_layer(&output_dm->edgeData, CD_ORIGINDEX);
 	// First split edges;
 	a = 0;
 	for (i = 0; i < ss->numEdges; i++) {
@@ -453,7 +532,7 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	}
 	// ORIGININDEX face;
 	input_index = ss->input->getTessFaceDataArray(ss->input, CD_ORIGINDEX);
-	output_index = CustomData_get_layer(&output->faceData, CD_ORIGINDEX);
+	output_index = CustomData_get_layer(&output_dm->faceData, CD_ORIGINDEX);
 	a = 0;
 	for (i = 0; i < ss->numFaces; i++) {
 		MPoly *poly = &ss->mpoly[i];
@@ -464,7 +543,7 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	//CustomData_add_layer(&output->polyData, CD_ORIGINDEX, CD_CALLOC, NULL, numPolys);
 	//CustomData_get_layer(&output->polyData, CD_ORIGINDEX);
 	
-	return output;
+	return output_dm;
 }
 
 /////////////////////////////////////////////////////////////

@@ -24,12 +24,7 @@ typedef struct DerivedMesh DerivedMesh;
 typedef struct SLSubSurf SLSubSurf;
 
 /// The output DM for the Stam/Loop subdivision modifier.
-/*typedef struct SLDerivedMesh {
-	DerivedMesh dm; // Output derived mesh.
-	SLSubSurf *ss;
-	int drawInteriorEdges;
-} SLDerivedMesh;*/
-
+typedef struct SLDerivedMesh SLDerivedMesh;
 
 /**
  * \file LSSurf.h
