@@ -264,8 +264,12 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 		MEdge *edge = &ss->medge[i];
 		medges[k+0].v1 = edge->v1;
 		medges[k+0].v2 = ss->numVerts + i;
+		medges[k+0].crease = edge->crease;
+		medges[k+0].bweight = edge->bweight;
 		medges[k+1].v1 = ss->numVerts + i;
 		medges[k+1].v2 = edge->v2;
+		medges[k+1].crease = edge->crease;
+		medges[k+1].bweight = edge->bweight;
 		//printf("medges[%d] = {%d, %d}\n", i, medges[i+0].v1, medges[i+0].v2);
 		//printf("medges[%d] = {%d, %d}\n", i+1, medges[i+0].v1, medges[i+0].v2);
 		k += 2;
@@ -421,6 +425,17 @@ static void slDM_getMinMax(DerivedMesh *dm, float min_r[3], float max_r[3]) {
 	}
 	for(i = 0; i < ss->numVerts; i++) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
 		_minmax_v3_v3v3(_origCoord(ss, i), min_r, max_r);
+	}
+}
+*/
+
+/*
+void _copyOver(DerivedMesh *input, DerivedMesh *output) {
+	float *input_paint = CustomData_get_layer(&input->vertData, CD_PAINT_MASK);
+	if (input_paint) {
+		float *output_paint = CustomData_get_layer(&input->vertData, CD_PAINT_MASK);
+		float *output_paint = CustomData_add_layer(&cddm->vertData,
+							CD_PAINT_MASK, CD_CALLOC, NULL, numVerts);
 	}
 }
 */
