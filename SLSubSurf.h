@@ -50,14 +50,6 @@ struct SLSubSurf {
 	MLoop *mloop;
 	MPoly *mpoly;
 
-	// The subdivided, smoothed, output mesh.
-	MVert *o_vert;
-	MEdge *o_edge;
-	MLoop *o_loop;
-	MPoly *o_poly;
-	float (*eco)[3]; // Store interpolated edge coordinate. Much easier using this.
-	// eco could be removed is the only the input coordinates are used (but its more tedious to implement)
-
 	// Maps necessary for quick access to the smoothing part
 	// (TODO: it is possible that this could be performed without these, but its much simpler with them).
 	int *poly2vert; // Maps old faces to new vert indices.
@@ -68,11 +60,6 @@ struct SLSubSurf {
 	MeshElemMap *vert2edge;
 	int *vert2edge_mem;
 };
-
-int SL_giveNumberOfInternalFaces(MPoly *poly);
-int SL_giveNumberOfInternalNodes(MPoly *poly);
-int SL_giveNumberOfInternalEdges(MPoly *poly);
-int SL_giveNumberOfInternalLoops(MPoly *poly);
 
 int SL_giveTotalNumberOfSubVerts(SLSubSurf *ss);
 int SL_giveTotalNumberOfSubEdges(SLSubSurf *ss);
@@ -91,4 +78,7 @@ void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]);
 SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss);
 void SL_SubSurf_free(SLSubSurf *ss);
-void SL_processSync(SLSubSurf *ss);
+
+void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output);
+void SL_syncUV(SLSubSurf *ss, DerivedMesh *output, int useSubsurfUv, int n);
+void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n);

@@ -34,28 +34,10 @@
 
 #include "DNA_mesh_types.h"
 #include "DNA_scene_types.h"
-//#include "DNA_meshdata_types.h"
-//#include "DNA_modifier_types.h"
-//#include "DNA_object_types.h"
-
-//#include "BLI_utildefines.h"
-//#include "BLI_bitmap.h"
-//#include "BLI_blenlib.h"
-//#include "BLI_edgehash.h"
-//#include "BLI_math.h"
-//#include "BLI_memarena.h"
-//#include "BLI_pbvh.h"
-//#include "BLI_array.h"
 
 #include "BKE_modifier.h"
 #include "BKE_scene.h"
 #include "BKE_subsurf.h"
-//#include "BKE_cdderivedmesh.h"
-//#include "BKE_global.h"
-//#include "BKE_mesh.h"
-//#include "BKE_multires.h"
-//#include "BKE_paint.h"
-//#include "BKE_tessmesh.h"
 
 #include "SLSubSurf.h"
 
@@ -69,10 +51,13 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	SubsurfFlags flags)
 {
 	SLSubSurf *ss;
+	int i;
+	int numCol, numTex;
 	int levels;
 	int smoothing = smd->subdivType == ME_SL_SUBSURF;
 	int useSubsurfUv = smd->flags & eSubsurfModifierFlag_SubsurfUv;
-	int drawInteriorEdges = !(smd->flags & eSubsurfModifierFlag_ControlEdges);
+	// TODO drawInterior
+	//int drawInteriorEdges = !(smd->flags & eSubsurfModifierFlag_ControlEdges);
 	DerivedMesh *result;
 	
 	// We don't use caches for this modifier
@@ -96,7 +81,15 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	
 	ss = SL_SubSurf_new(smoothing, input, vertCos);
 	result = SL_SubSurf_constructOutput(ss);
-	SL_processSync(ss); // Actually computes coordinates and such.
+	SL_syncVerts(ss, result);
+	numCol = CustomData_number_of_layers(&input->loopData, CD_MLOOPCOL);
+	for (i = 0; i < numCol; i++) {
+		SL_syncPaint(ss, result, i);
+	}
+	numTex = CustomData_number_of_layers(&input->loopData, CD_MLOOPUV);
+	for (i = 0; i < numTex; i++) {
+		SL_syncUV(ss, result, useSubsurfUv, i);
+	}
 	result->calcNormals(result);
 	// TODO: NOW WE LEAK MEMORY! FIXME FIXME FIXME Need to use the SLDerivedMesh and overload the release function
 	return result;
