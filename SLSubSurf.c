@@ -429,16 +429,75 @@ static void slDM_getMinMax(DerivedMesh *dm, float min_r[3], float max_r[3]) {
 }
 */
 
-/*
-void _copyOver(DerivedMesh *input, DerivedMesh *output) {
-	float *input_paint = CustomData_get_layer(&input->vertData, CD_PAINT_MASK);
-	if (input_paint) {
-		float *output_paint = CustomData_get_layer(&input->vertData, CD_PAINT_MASK);
-		float *output_paint = CustomData_add_layer(&cddm->vertData,
-							CD_PAINT_MASK, CD_CALLOC, NULL, numVerts);
+void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output) {
+	// No documentation of mcol, and I can't seem to get it to do *anything*. Giving up on it.
+	//MCol *input_paint = CustomData_get_layer(&input->vertData, CD_MCOL);
+	MLoopCol *loopc = CustomData_get_layer(&ss->input->loopData, CD_MLOOPCOL);
+	if (loopc) {
+		int numPolys, i, j;
+		MPoly *poly;
+		MLoopCol *loop;
+		MLoopCol *o_loopc = CustomData_get_layer(&output->loopData, CD_MLOOPCOL);
+		if (!o_loopc) {
+			o_loopc = CustomData_add_layer(&output->loopData, CD_MLOOPCOL, CD_CALLOC, NULL, output->numVertData);
+		}
+		
+		numPolys = ss->numFaces;
+		for (i = 0; i < numPolys; i++) {
+			poly = &ss->mpoly[i];
+			loop = &loopc[poly->loopstart];
+			if (poly->totloop == 3) {
+				// Start by computing the edge colors
+				char a[3], r[3], g[3], b[3];
+				for (j = 0; j < 3; j++) {
+					int k = (j + 1) % 3;
+					a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
+					r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
+					g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
+					b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
+				}
+				
+				// Outer triangles first;
+				for (j = 0; j < 3; j++) {
+					int k = (j + 2) % 3;
+					o_loopc->a = loop[j].a; o_loopc->r = loop[j].r; o_loopc->g = loop[j].g; o_loopc->b = loop[j].b; o_loopc++;
+					o_loopc->a = a[j];      o_loopc->r = r[j];      o_loopc->g = g[j];      o_loopc->b = b[j]; o_loopc++;
+					o_loopc->a = a[k];      o_loopc->r = r[k];      o_loopc->g = g[k];      o_loopc->b = b[k]; o_loopc++;
+				}
+				// Center triangle
+				o_loopc->a = a[2]; o_loopc->r = r[2]; o_loopc->g = g[2]; o_loopc->b = b[2]; o_loopc++;
+				o_loopc->a = a[0]; o_loopc->r = r[0]; o_loopc->g = g[0]; o_loopc->b = b[0]; o_loopc++;
+				o_loopc->a = a[1]; o_loopc->r = r[1]; o_loopc->g = g[1]; o_loopc->b = b[1]; o_loopc++;
+			} else {
+				int n = poly->totloop;
+				// Center color;
+				char ca, cr, cg, cb;
+				float fca = 0, fcr = 0, fcg = 0, fcb = 0;
+				// Edge color;
+				char a[n], r[n], g[n], b[n];
+				for (j = 0; j < n; j++) {
+					int k = (j + 1) % n;
+					fca += loop[j].a; fcr += loop[j].r; fcg += loop[j].g; fcb += loop[j].b;
+					a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
+					r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
+					g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
+					b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
+				}
+				ca = (char)(fca/n); cr = (char)(fcr/n); cg = (char)(fcg/n); cb = (char)(fcb/n);
+				printf("center color = %d, %d, %d, %d\n", ca, cr, cg, cb);
+				// Now construct the loops, which all start from the corner node
+				for (j = 0; j < n; j++) {
+					int k = (j + n - 1) % n;
+					o_loopc->a = loop[j].a; o_loopc->r = loop[j].r; o_loopc->g = loop[j].g; o_loopc->b = loop[j].b; o_loopc++;
+					o_loopc->a = a[j];      o_loopc->r = r[j];      o_loopc->g = g[j];      o_loopc->b = b[j];      o_loopc++;
+					o_loopc->a = ca;        o_loopc->r = cr;        o_loopc->g = cg;        o_loopc->b = cb;        o_loopc++;
+					o_loopc->a = a[k];      o_loopc->r = r[k];      o_loopc->g = g[k];      o_loopc->b = b[k];      o_loopc++;
+				}
+			}
+		}
+		//printf("Vertex paint synced\n");
 	}
 }
-*/
 
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	int numVerts, numEdges, numFaces, numLoops;
@@ -557,6 +616,9 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	// TODO: Not sure why this isn't needed (?)
 	//CustomData_add_layer(&output->polyData, CD_ORIGINDEX, CD_CALLOC, NULL, numPolys);
 	//CustomData_get_layer(&output->polyData, CD_ORIGINDEX);
+	
+	// Vertex paint
+	SL_syncPaint(ss, output_dm);
 	
 	return output_dm;
 }

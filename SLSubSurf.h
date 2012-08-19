@@ -19,6 +19,7 @@ typedef struct MEdge MEdge;
 typedef struct MLoop MLoop;
 typedef struct MPoly MPoly;
 typedef struct MFace MFace;
+typedef struct MLoopCol MLoopCol;
 typedef struct MeshElemMap MeshElemMap;
 typedef struct DerivedMesh DerivedMesh;
 typedef struct SLSubSurf SLSubSurf;
