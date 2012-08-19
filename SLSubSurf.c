@@ -800,7 +800,7 @@ void SL_processSync(SLSubSurf *ss) {
 				}
 
 				/* r = co * 0.75 + q * 0.25 */
-				for (x = 0; x < 3; x++) q[x] = origCoord[x]*0.75f + q[x]*0.25f;
+				for (x = 0; x < 3; x++) q[x] = origCoord[x]*0.5f + q[x]*0.5f;
 
 				/* nCo = nCo + (r - nCo) * avgSharpness */
 				for (x = 0; x < 3; x++) coord[x] += (q[x] - coord[x]) * avgSharpness;
