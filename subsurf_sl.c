@@ -25,6 +25,8 @@
  * ***** END GPL LICENSE BLOCK *****
  */
 
+// Contributor(s): Mikael Öhman
+
 /** \file blender/blenkernel/intern/subsurf_sl.c
  *  \ingroup bke
  */
@@ -76,8 +78,8 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	else /*if (flags & SUBSURF_FOR_EDIT_MODE)*/ {
 		levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->levels) : smd->levels;
 	}
-	if (levels == 0)
-		return input;
+	// Not sure if this is acceptable;
+	if (levels == 0) return input;
 	
 	ss = SL_SubSurf_new(smoothing, input, vertCos);
 	result = SL_SubSurf_constructOutput(ss);
@@ -91,7 +93,8 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 		SL_syncUV(ss, result, useSubsurfUv, i);
 	}
 	result->calcNormals(result);
-	// TODO: NOW WE LEAK MEMORY! FIXME FIXME FIXME Need to use the SLDerivedMesh and overload the release function
+	result->recalcTessellation(result);
+	
 	return result;
 }
 

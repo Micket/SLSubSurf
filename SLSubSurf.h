@@ -14,6 +14,8 @@
   0. You just DO WHAT THE FUCK YOU WANT TO.
 */
 
+// Contributor(s): Mikael Öhman
+
 typedef struct MVert MVert;
 typedef struct MEdge MEdge;
 typedef struct MLoop MLoop;

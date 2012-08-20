@@ -14,6 +14,8 @@
    0. You just DO WHAT THE FUCK YOU WANT TO.
  */
 
+// Contributor(s): Mikael Öhman
+
 #include "SLSubSurf.h"
 #include "stdlib.h"
 #include "BLI_math_vector.h"
@@ -298,10 +300,11 @@ SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[
 	// For convenient access.
 	ss->input = input;
 	ss->vertexCos = vertexCos;
-	ss->mvert = CustomData_get_layer(&input->vertData, CD_MVERT);
-	ss->medge = CustomData_get_layer(&input->edgeData, CD_MEDGE);
-	ss->mpoly = CustomData_get_layer(&input->polyData, CD_MPOLY);
-	ss->mloop = CustomData_get_layer(&input->loopData, CD_MLOOP);
+
+	ss->mvert = input->getVertArray(input);//CustomData_get_layer(&input->vertData, CD_MVERT);
+	ss->medge = input->getEdgeArray(input);//CustomData_get_layer(&input->edgeData, CD_MEDGE);
+	ss->mpoly = input->getPolyArray(input);//CustomData_get_layer(&input->polyData, CD_MPOLY);
+	ss->mloop = input->getLoopArray(input);//CustomData_get_layer(&input->loopData, CD_MLOOP);
 	
 	ss->numVerts = input->getNumVerts(input);
 	ss->numEdges = input->getNumEdges(input);
@@ -310,7 +313,9 @@ SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[
 	
 	ss->poly2vert = MEM_callocN(sizeof(int)*ss->numFaces, "sl poly2vert");
 	idx = ss->numVerts + ss->numEdges;
+	printf("numPolys/Faces = %d, mpoly = %p, medge = %p, mvert = %p, mloop = %p,\n", ss->numFaces, ss->mpoly, ss->medge, ss->mvert, ss->mloop);
 	for (i = 0; i < ss->numFaces; i++) {
+		printf("ss->mpoly = %p, i = %d\n", ss->mpoly, i);
 		if (ss->mpoly[i].totloop > 3) { // Just ignoring triangles, they will not be accessed.
 			ss->poly2vert[i] = idx;
 			idx++;
@@ -471,10 +476,8 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	SL_copyNewPolys(ss, CDDM_get_polys(output_dm));
 	SL_copyNewLoops(ss, CDDM_get_loops(output_dm));
 	SL_copyNewEdges(ss, CDDM_get_edges(output_dm));
-	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output_dm)); // TODO: I consider leaving everything about tesselation for CDDM
-	// TODO: Will probably need some other info copied over from here 
-	
-	// Other static data we must fill;
+	// TODO: I consider leaving everything about tesselation for CDDM
+	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output_dm));
 	/* We absolutely need that layer, else it's no valid tessellated data! */
 	polyidx = CustomData_get_layer(&output_dm->faceData, CD_POLYINDEX);
 	for (i = 0; i < numFaces; i++) polyidx[i] = i; // TODO: Check this, i think its OK. (it should just be 1 face per poly)
@@ -607,6 +610,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 		c2 = _origCoord(ss, edge->v2);
 		for (x = 0; x < 3; x++)
 			eco[i][x] = 0.5*c1[x] + 0.5*c2[x];
+		printf("edge crease = %d\n", edge->crease);
 	}
 
 	//printf("Computing vert smoothing (smooth %s) for %d verts\n", ss->smoothing ? "on":"off", ss->numVerts);
@@ -625,22 +629,22 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 			// Compute average sharpness and seam;
 			MeshElemMap *v2e = &ss->vert2edge[i];
 			int j;
-			int seamCount = 0;
+			//int seamCount = 0;
 			int sharpnessCount = 0;
-			int avgSharpness = 0.0f;
+			float avgSharpness = 0.0f;
 			//int seam;
 			for (j = 0; j < v2e->count; j++) {
 				int e = v2e->indices[j];
 				MEdge *edge = &ss->medge[e];
-				MeshElemMap *e2p = &ss->edge2poly[e];
+				//MeshElemMap *e2p = &ss->edge2poly[e];
 
 				// This is just for smoothing the UV coordinates (?)
 				//if ( (edge->flag & ME_SEAM) && e2p->count < 2)
 				//	seamCount++;
-
+				printf("edge %d, crease = %d\n", e, edge->crease);
 				if (ss->medge[e].crease != 0) {
 					sharpnessCount++;
-					avgSharpness += ss->medge[e].crease / 256.f;
+					avgSharpness += ss->medge[e].crease / 255.f;
 				}
 			}
 
@@ -650,6 +654,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 					avgSharpness = 1.0f;
 				}
 			}
+			printf("avgSharpness = %f, sharpnessCount = %d\n", avgSharpness, sharpnessCount);
 
 			// TODO: Is this correct? I don't know how to deal with seams, or why they matter here.
 			//seam = seamCount >= 2 && seamCount != v2e->count;
@@ -741,7 +746,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 				zero_v3(q);
 				for (j = 0; j < v2e->count; j++) {
 					int e = v2e->indices[j];
-					MeshElemMap *e2p = &ss->edge2poly[e];
+					//MeshElemMap *e2p = &ss->edge2poly[e];
 					MEdge *edge = &ss->medge[e];
 					/*if ( edge->flag & ME_SEAM ) {
 						if (e2p->count < 2)
@@ -754,7 +759,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 
 				mul_v3_fl(q, 1.0f / sharpnessCount);
 
-				if (sharpnessCount != 2 /*|| seam*/) {
+				if (sharpnessCount > 2 || v2p->count == 1 /*|| seam*/) {
 					/* q = q + (co - q) * avgSharpness */
 					for (x = 0; x < 3; x++) q[x] += (origCoord[x] - q[x])*avgSharpness;
 				}
@@ -779,7 +784,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 		MeshElemMap *e2p = &ss->edge2poly[i];		
 		float *coord = o_vert[vertidx].co;
 		// Create the interpolated coordinates
-		if (!ss->smoothing || e2p->count < 2 || edge->crease >= 256) { // If its an edge, or maximum sharpness, then just average.
+		if (!ss->smoothing || e2p->count < 2 || edge->crease >= 255) { // If its an edge, or maximum sharpness, then just average.
 			copy_v3_v3(coord, eco[i]); // Already there.
 		} else { // Otherwise smooth
 			int j, avgCount, numTris = 0, numQuads = 0, numNeighbors;
@@ -848,7 +853,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 			if (edge->crease > 0 ) {
 				int x;
 				for (x = 0; x < 3; x++) {
-					coord[x] += (edge->crease / 256.f) * (eco[i][x] - coord[x]);
+					coord[x] += (edge->crease / 255.f) * (eco[i][x] - coord[x]);
 				}
 			}
 			//printf("Smoothed coordinate[%d] (edge) = {%e, %e, %e}\n", vertidx, o_vert[vertidx].co[0], o_vert[vertidx].co[1], o_vert[vertidx].co[2]);
@@ -935,72 +940,69 @@ void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n) {
 	// No documentation of mcol, and I can't seem to get it to do *anything*. Giving up on it.
 	//MCol *input_paint = CustomData_get_layer_n(&input->vertData, CD_MCOL, n);
 	MLoopCol *loopc = CustomData_get_layer_n(&ss->input->loopData, CD_MLOOPCOL, n);
-	if (loopc) {
-		int numPolys, i, j;
-		MPoly *poly;
-		MLoopCol *loop;
-		MLoopCol *o_loopc = CustomData_get_layer_n(&output->loopData, CD_MLOOPCOL, n);
-		if (!o_loopc) {
-			// Not sure how this works with "n" ? 
-			o_loopc = CustomData_add_layer(&output->loopData, CD_MLOOPCOL, CD_CALLOC, NULL, output->numVertData);
-		}
-		
-		numPolys = ss->numFaces;
-		for (i = 0; i < numPolys; i++) {
-			poly = &ss->mpoly[i];
-			loop = &loopc[poly->loopstart];
-			if (poly->totloop == 3) {
-				// Start by computing the edge colors
-				char a[3], r[3], g[3], b[3];
-				for (j = 0; j < 3; j++) {
-					int k = (j + 1) % 3;
-					a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
-					r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
-					g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
-					b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
-				}
-				
-				// Outer triangles first;
-				for (j = 0; j < 3; j++) {
-					int k = (j + 2) % 3;
-					o_loopc->a = loop[j].a; o_loopc->r = loop[j].r; o_loopc->g = loop[j].g; o_loopc->b = loop[j].b; o_loopc++;
-					o_loopc->a = a[j];      o_loopc->r = r[j];      o_loopc->g = g[j];      o_loopc->b = b[j]; o_loopc++;
-					o_loopc->a = a[k];      o_loopc->r = r[k];      o_loopc->g = g[k];      o_loopc->b = b[k]; o_loopc++;
-				}
-				// Center triangle
-				o_loopc->a = a[2]; o_loopc->r = r[2]; o_loopc->g = g[2]; o_loopc->b = b[2]; o_loopc++;
-				o_loopc->a = a[0]; o_loopc->r = r[0]; o_loopc->g = g[0]; o_loopc->b = b[0]; o_loopc++;
-				o_loopc->a = a[1]; o_loopc->r = r[1]; o_loopc->g = g[1]; o_loopc->b = b[1]; o_loopc++;
-			} else {
-				int n = poly->totloop;
-				// Center color;
-				char ca, cr, cg, cb;
-				float fca = 0, fcr = 0, fcg = 0, fcb = 0;
-				// Edge color;
-				char a[n], r[n], g[n], b[n];
-				for (j = 0; j < n; j++) {
-					int k = (j + 1) % n;
-					fca += loop[j].a; fcr += loop[j].r; fcg += loop[j].g; fcb += loop[j].b;
-					a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
-					r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
-					g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
-					b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
-				}
-				ca = (char)(fca/n); cr = (char)(fcr/n); cg = (char)(fcg/n); cb = (char)(fcb/n);
-				//printf("center color = %d, %d, %d, %d\n", ca, cr, cg, cb);
-				// Now construct the loops, which all start from the corner node
-				for (j = 0; j < n; j++) {
-					int k = (j + n - 1) % n;
-					o_loopc->a = loop[j].a; o_loopc->r = loop[j].r; o_loopc->g = loop[j].g; o_loopc->b = loop[j].b; o_loopc++;
-					o_loopc->a = a[j];      o_loopc->r = r[j];      o_loopc->g = g[j];      o_loopc->b = b[j];      o_loopc++;
-					o_loopc->a = ca;        o_loopc->r = cr;        o_loopc->g = cg;        o_loopc->b = cb;        o_loopc++;
-					o_loopc->a = a[k];      o_loopc->r = r[k];      o_loopc->g = g[k];      o_loopc->b = b[k];      o_loopc++;
-				}
+	int numPolys, i, j;
+	MPoly *poly;
+	MLoopCol *loop;
+	MLoopCol *o_loopc = CustomData_get_layer_n(&output->loopData, CD_MLOOPCOL, n);
+	if (!o_loopc) {
+		// Not sure how this works with "n" ? 
+		o_loopc = CustomData_add_layer(&output->loopData, CD_MLOOPCOL, CD_CALLOC, NULL, output->numVertData);
+	}
+	
+	numPolys = ss->numFaces;
+	for (i = 0; i < numPolys; i++) {
+		poly = &ss->mpoly[i];
+		loop = &loopc[poly->loopstart];
+		if (poly->totloop == 3) {
+			// Start by computing the edge colors
+			char a[3], r[3], g[3], b[3];
+			for (j = 0; j < 3; j++) {
+				int k = (j + 1) % 3;
+				a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
+				r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
+				g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
+				b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
+			}
+			
+			// Outer triangles first;
+			for (j = 0; j < 3; j++) {
+				int k = (j + 2) % 3;
+				o_loopc->a = loop[j].a; o_loopc->r = loop[j].r; o_loopc->g = loop[j].g; o_loopc->b = loop[j].b; o_loopc++;
+				o_loopc->a = a[j];      o_loopc->r = r[j];      o_loopc->g = g[j];      o_loopc->b = b[j]; o_loopc++;
+				o_loopc->a = a[k];      o_loopc->r = r[k];      o_loopc->g = g[k];      o_loopc->b = b[k]; o_loopc++;
+			}
+			// Center triangle
+			o_loopc->a = a[2]; o_loopc->r = r[2]; o_loopc->g = g[2]; o_loopc->b = b[2]; o_loopc++;
+			o_loopc->a = a[0]; o_loopc->r = r[0]; o_loopc->g = g[0]; o_loopc->b = b[0]; o_loopc++;
+			o_loopc->a = a[1]; o_loopc->r = r[1]; o_loopc->g = g[1]; o_loopc->b = b[1]; o_loopc++;
+		} else {
+			int n = poly->totloop;
+			// Center color;
+			char ca, cr, cg, cb;
+			float fca = 0, fcr = 0, fcg = 0, fcb = 0;
+			// Edge color;
+			char a[n], r[n], g[n], b[n];
+			for (j = 0; j < n; j++) {
+				int k = (j + 1) % n;
+				fca += loop[j].a; fcr += loop[j].r; fcg += loop[j].g; fcb += loop[j].b;
+				a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
+				r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
+				g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
+				b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
+			}
+			ca = (char)(fca/n); cr = (char)(fcr/n); cg = (char)(fcg/n); cb = (char)(fcb/n);
+			//printf("center color = %d, %d, %d, %d\n", ca, cr, cg, cb);
+			// Now construct the loops, which all start from the corner node
+			for (j = 0; j < n; j++) {
+				int k = (j + n - 1) % n;
+				o_loopc->a = loop[j].a; o_loopc->r = loop[j].r; o_loopc->g = loop[j].g; o_loopc->b = loop[j].b; o_loopc++;
+				o_loopc->a = a[j];      o_loopc->r = r[j];      o_loopc->g = g[j];      o_loopc->b = b[j];      o_loopc++;
+				o_loopc->a = ca;        o_loopc->r = cr;        o_loopc->g = cg;        o_loopc->b = cb;        o_loopc++;
+				o_loopc->a = a[k];      o_loopc->r = r[k];      o_loopc->g = g[k];      o_loopc->b = b[k];      o_loopc++;
 			}
 		}
-		//printf("Vertex paint synced\n");
 	}
+	//printf("Vertex paint synced\n");
 }
-
 
 /////////////////////////////////////////////////////////////
