@@ -80,10 +80,14 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	}
 	// Not sure if this is acceptable;
 	if (levels == 0) return input;
-	
-	ss = SL_SubSurf_new(smoothing, input, vertCos);
-	result = SL_SubSurf_constructOutput(ss);
-	SL_syncVerts(ss, result);
+
+	ss = NULL;
+	result = input;
+	for (i = 0; i < levels; i++) {
+		ss = SL_SubSurf_new(ss, smoothing, result, vertCos);
+		result = SL_SubSurf_constructOutput(ss);
+		SL_syncVerts(ss, result);
+	}
 	numCol = CustomData_number_of_layers(&input->loopData, CD_MLOOPCOL);
 	for (i = 0; i < numCol; i++) {
 		SL_syncPaint(ss, result, i);

@@ -37,6 +37,9 @@ typedef struct SLDerivedMesh SLDerivedMesh;
  */
 
 struct SLSubSurf {
+	// For recursive usage;
+	SLSubSurf *prev;
+	
     int smoothing; // Boolean, nonzero for smoothing.
 
     int numVerts;
@@ -77,7 +80,7 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces);
 
 void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]);
 
-SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
+SLSubSurf* SL_SubSurf_new(SLSubSurf *prev, int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss);
 void SL_SubSurf_free(SLSubSurf *ss);
 

@@ -291,9 +291,10 @@ static float  *_origCoord(SLSubSurf *ss, int vert) {
 
 /////////////////////////////////////////////////////////////
 
-SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
+SLSubSurf* SL_SubSurf_new(SLSubSurf *prev, int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
 	int i, idx, numLoops;
 	SLSubSurf *ss = (SLSubSurf*)MEM_callocN(sizeof(SLSubSurf), "slsubsurf");
+	ss->prev = prev; // Should be NULL if its the first subsurf in the modifier
 	ss->smoothing = smoothing;
 	ss->numVerts = ss->numEdges = ss->numFaces = 0;
 	
@@ -313,9 +314,7 @@ SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[
 	
 	ss->poly2vert = MEM_callocN(sizeof(int)*ss->numFaces, "sl poly2vert");
 	idx = ss->numVerts + ss->numEdges;
-	printf("numPolys/Faces = %d, mpoly = %p, medge = %p, mvert = %p, mloop = %p,\n", ss->numFaces, ss->mpoly, ss->medge, ss->mvert, ss->mloop);
 	for (i = 0; i < ss->numFaces; i++) {
-		printf("ss->mpoly = %p, i = %d\n", ss->mpoly, i);
 		if (ss->mpoly[i].totloop > 3) { // Just ignoring triangles, they will not be accessed.
 			ss->poly2vert[i] = idx;
 			idx++;
@@ -361,6 +360,11 @@ struct SLDerivedMesh {
 };
 
 void SL_SubSurf_free(SLSubSurf *ss) {
+	// Recursively frees;
+	if (ss->prev) {
+		// If is recursive, then the previous DM should be the SLDerivedMesh, and releasing that also calls this function.
+		ss->input->release(ss->input);
+	}
 	MEM_freeN(ss->poly2vert);
 	MEM_freeN(ss->vert2poly);
 	MEM_freeN(ss->vert2poly_mem);
@@ -610,7 +614,6 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 		c2 = _origCoord(ss, edge->v2);
 		for (x = 0; x < 3; x++)
 			eco[i][x] = 0.5*c1[x] + 0.5*c2[x];
-		printf("edge crease = %d\n", edge->crease);
 	}
 
 	//printf("Computing vert smoothing (smooth %s) for %d verts\n", ss->smoothing ? "on":"off", ss->numVerts);
@@ -641,7 +644,6 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 				// This is just for smoothing the UV coordinates (?)
 				//if ( (edge->flag & ME_SEAM) && e2p->count < 2)
 				//	seamCount++;
-				printf("edge %d, crease = %d\n", e, edge->crease);
 				if (ss->medge[e].crease != 0) {
 					sharpnessCount++;
 					avgSharpness += ss->medge[e].crease / 255.f;
@@ -654,7 +656,6 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 					avgSharpness = 1.0f;
 				}
 			}
-			printf("avgSharpness = %f, sharpnessCount = %d\n", avgSharpness, sharpnessCount);
 
 			// TODO: Is this correct? I don't know how to deal with seams, or why they matter here.
 			//seam = seamCount >= 2 && seamCount != v2e->count;
