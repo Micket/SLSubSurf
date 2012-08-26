@@ -101,9 +101,11 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	}
 	// We know the what the output DM contains, so we can optimize the tess face generation;
 	SL_constructTessFaces(ss, result);
+	
+	// Not clear where this should be done. Its inconsistent if its in object mode vs edit mode.
+	result->calcNormals(result);
+	
 	// TODO: All poly custom data should be copied over to tess faces as CD_REFERENCE, which would save time and memory.
-	// TODO: We really need to work out what to do with calcNormals, which take up a significant time;
-	//result->calcNormals(result);
 	//result->recalcTessellation(result);
 	
 	return result;

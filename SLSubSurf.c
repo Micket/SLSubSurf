@@ -189,7 +189,8 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 	faceVertStartIdx = ss->numVerts + ss->numEdges; // Number the new internal verts as we go
 	for (i = 0; i < ss->numFaces; i++) {
 		poly = &ss->mpoly[i];
-		loop = &ss->mloop[poly->loopstart];
+		n = poly->loopstart;
+		loop = &ss->mloop[n];
 		n = poly->totloop;
 		if (n == 3) {
 			// First the corner triangles
@@ -299,6 +300,28 @@ static float  *_origCoord(SLSubSurf *ss, int vert) {
 
 /////////////////////////////////////////////////////////////
 
+SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
+	SLSubSurf *ss = (SLSubSurf*)MEM_callocN(sizeof(SLSubSurf), "slsubsurf");
+	ss->smoothing = smoothing;
+	ss->numVerts = ss->numEdges = ss->numFaces = 0;
+	
+	// For convenient access.
+	ss->input = input;
+	ss->vertexCos = vertexCos;
+
+	ss->mvert = input->getVertArray(input);
+	ss->medge = input->getEdgeArray(input);
+	ss->mpoly = input->getPolyArray(input);
+	ss->mloop = input->getLoopArray(input);
+	
+	ss->numVerts = input->getNumVerts(input);
+	ss->numEdges = input->getNumEdges(input);
+	ss->numFaces = input->getNumPolys(input);
+
+	//SL_constructMaps(ss);
+	return ss;
+}
+
 #ifdef _OPENMP
 static omp_lock_t alloc_lock;
 
@@ -310,28 +333,6 @@ static void OMP_unlock_alloc_thread(void) {
 	omp_unset_lock(&alloc_lock);
 }
 #endif
-
-SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
-	SLSubSurf *ss = (SLSubSurf*)MEM_callocN(sizeof(SLSubSurf), "slsubsurf");
-	ss->smoothing = smoothing;
-	ss->numVerts = ss->numEdges = ss->numFaces = 0;
-	
-	// For convenient access.
-	ss->input = input;
-	ss->vertexCos = vertexCos;
-
-	ss->mvert = input->getVertArray(input);//CustomData_get_layer(&input->vertData, CD_MVERT);
-	ss->medge = input->getEdgeArray(input);//CustomData_get_layer(&input->edgeData, CD_MEDGE);
-	ss->mpoly = input->getPolyArray(input);//CustomData_get_layer(&input->polyData, CD_MPOLY);
-	ss->mloop = input->getLoopArray(input);//CustomData_get_layer(&input->loopData, CD_MLOOP);
-	
-	ss->numVerts = input->getNumVerts(input);
-	ss->numEdges = input->getNumEdges(input);
-	ss->numFaces = input->getNumPolys(input);
-
-	//SL_constructMaps(ss);
-	return ss;
-}
 
 void SL_constructMaps(SLSubSurf *ss) {
 	int i, idx, numLoops;
@@ -428,7 +429,63 @@ static void slDM_release(DerivedMesh *dm) {
 	}
 }
 
-//static void slDM_recalcTessellation(DerivedMesh *UNUSED(dm)) { /* Nothing to do */ }
+//static void slDM_doNothing(DerivedMesh *UNUSED(dm)) {}
+
+#if 0
+void SL_calcNormals(DerivedMesh *output) {
+	int i, numPolys, numVerts;
+	float (*vertNo)[3];
+	float (*polyNo)[3];
+	MPoly *poly;
+	MLoop *loop;
+	MVert *vert;
+
+	numPolys = output->getNumPolys(output);
+	numVerts = output->getNumVerts(output);
+	
+	poly = output->getPolyArray(output);
+	loop = output->getLoopArray(output);
+	vert = output->getVertArray(output);
+	
+	vertNo = MEM_mallocN(sizeof(float)*numVerts*3, "temp vert normals");
+	
+	if (!CustomData_get_layer(&output->polyData, CD_NORMAL))
+		CustomData_add_layer(&output->polyData, CD_NORMAL, CD_CALLOC, NULL, numPolys);
+	polyNo = CustomData_get_layer(&output->polyData, CD_NORMAL);
+	
+	#pragma omp for
+	for (i = 0; i < numPolys; i++) {
+		MPoly *p = &poly[i];
+		MLoop *l = &loop[p->loopstart];
+		mesh_calc_poly_normal(p, l, vert, polyNo[i]);
+	}
+	
+	CustomData_add_layer(&output->faceData, CD_NORMAL, CD_REFERENCE, polyNo, numPolys);
+
+	#pragma omp for
+	for (i = 0; i < numVerts; i++) {
+		zero_v3(vertNo[i]);
+	}
+	
+	for (i = 0; i < numPolys; i++) {
+		int j;
+		MPoly *p = &poly[i];
+		MLoop *l = &loop[p->loopstart];
+		
+		for (j = 0; j < p->totloop; j++) {
+			add_v3_v3(vertNo[l[j].v], polyNo[i]);
+		}
+	}
+	
+	#pragma omp for
+	for (i = 0; i < numVerts; i++) {
+		normalize_v3(vertNo[i]);
+		normal_float_to_short_v3(vert[i].no, vertNo[i]);
+	}
+	
+	MEM_freeN(vertNo);
+}
+#endif
 
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	int numVerts, numEdges, numFaces, numLoops;
@@ -483,6 +540,9 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	//output_dm->recalcTessellation = slDM_recalcTessellation; // I could perhaps optimize some stuff here.
 	output_dm->release = slDM_release; // Must be replaced since we have our own custom structure (!)
 	// TODO: Possibly replace any other functions from default CDDM for performance reasons.
+	// Just calculate them here, once (No good for multi-res applications, where normals aren't always necessary (but time consuming)
+	//SL_calcNormals(output_dm);
+	//output_dm->calcNormals = SL_calcNormals;
 	
 	// This was done in in the CCG code, so i suppose I'll use that as well.
 	CustomData_free_layer_active(&output_dm->polyData, CD_NORMAL, output_dm->numPolyData);
@@ -905,7 +965,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 }
 
 // Syncs the UV coordinates for layer n
-void SL_syncUV(SLSubSurf *ss, DerivedMesh *output, int smoothing, int n) {
+void SL_syncUV(SLSubSurf *ss, DerivedMesh *output, int UNUSED(smoothing), int n) {
 	// TODO: Support smoothing subsurf uvs
 	int i,j;
 	// No smoothing for now.
