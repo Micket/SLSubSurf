@@ -36,10 +36,10 @@ typedef struct SLDerivedMesh SLDerivedMesh;
  * Only subdivides 1 level!
  */
 
+/**
+ * Structure containing necessary information for syncing the coarse input mesh to the refined output mesh.
+ */
 struct SLSubSurf {
-	// For recursive usage;
-	SLSubSurf *prev;
-	
     int smoothing; // Boolean, nonzero for smoothing.
 
     int numVerts;
@@ -80,10 +80,14 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces);
 
 void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]);
 
-SLSubSurf* SL_SubSurf_new(SLSubSurf *prev, int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
+// These two functions could (should?) be merged.
+SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss);
+// This is separated because it only needs to be called by the last subsurf in the chain.
+void SL_constructTessFaces(SLSubSurf *ss, DerivedMesh *output);
 void SL_SubSurf_free(SLSubSurf *ss);
 
+// After setup, the syncing functions can be called multiple times and will replace in-memory structures, whether it be new paint, new coordinates or 
 void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output);
 void SL_syncUV(SLSubSurf *ss, DerivedMesh *output, int useSubsurfUv, int n);
 void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n);

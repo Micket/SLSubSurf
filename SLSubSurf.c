@@ -28,6 +28,10 @@
 #include "BKE_cdderivedmesh.h"
 #include "BKE_mesh.h"
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 /////////////////////////////////////////////////////////////
 // External helpers
 
@@ -70,7 +74,7 @@ int SL_giveTotalNumberOfSubLoops(SLSubSurf *ss) {
 /////////////////////////////////////////////////////////////
 
 void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
-	int i, j, k, prevJ, subEdgeNext, subEdgePrev, faceEdgeStartIdx, faceVertStartIdx;
+	int i, j, k, n, prevJ, subEdgeNext, subEdgePrev, faceEdgeStartIdx, faceVertStartIdx;
 	MPoly *poly;
 	MLoop *loop;
 	MEdge *eNext, *ePrev;
@@ -81,7 +85,8 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 	for (i = 0; i < ss->numFaces; i++) {
 		poly = &ss->mpoly[i];
 		loop = &ss->mloop[poly->loopstart];
-		if (poly->totloop == 3) {
+		n = poly->totloop;
+		if (n == 3) {
 			// First the corner triangles
 			for (j = 0; j < 3; j++) {
 				prevJ = (j + 2) % 3;
@@ -116,9 +121,9 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 			faceEdgeStartIdx += 3;
 			//faceVertStartIdx += 0;
 		} else {
-			for (j = 0; j < poly->totloop; j++) { // Loop over each sub-quad;
+			for (j = 0; j < n; j++) { // Loop over each sub-quad;
 				// Unsure if i negative values work, adding numVerts just in case.
-				prevJ = (j - 1 + poly->totloop) % poly->totloop;
+				prevJ = (j + n - 1) % n;
 				eNext = &ss->medge[loop[j].e];
 				ePrev = &ss->medge[loop[prevJ].e];
 
@@ -141,17 +146,18 @@ void SL_copyNewLoops(SLSubSurf *ss, MLoop *mloops) {
 				k += 4;
 				//printf("mloops.v = %e, %e, %e, %e\n", mloops[k+0].v, mloops[k+1].v, mloops[k+2].v, mloops[k+3].v);
 			}
-			faceEdgeStartIdx += poly->totloop;
+			faceEdgeStartIdx += n;
 			faceVertStartIdx += 1;
 		}
 	}
 }
 
 void SL_copyNewPolys(SLSubSurf *ss, MPoly *mpolys) {
-	int i, j, k = 0, m = 0;
+	int i, j, k = 0, m = 0, n;
 	for (i = 0; i < ss->numFaces; i++) {
 		MPoly *poly = &ss->mpoly[i];
-		if (poly->totloop == 3) {
+		n = poly->totloop;
+		if (n == 3) {
 			for (j = 0; j < 4; j++) { // note! 4 faces
 				mpolys[m].loopstart = k;
 				mpolys[m].totloop = 3;
@@ -161,7 +167,7 @@ void SL_copyNewPolys(SLSubSurf *ss, MPoly *mpolys) {
 				k += 3;
 			}
 		} else {
-			for (j = 0; j < poly->totloop; j++) {
+			for (j = 0; j < n; j++) {
 				mpolys[m].loopstart = k;
 				mpolys[m].totloop = 4;
 				mpolys[m].mat_nr = poly->mat_nr;
@@ -175,7 +181,7 @@ void SL_copyNewPolys(SLSubSurf *ss, MPoly *mpolys) {
 
 void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 {
-	int i, j, prevJ, k, faceVertStartIdx;
+	int i, j, prevJ, k, n, faceVertStartIdx;
 	MPoly *poly;
 	MLoop *loop;
 
@@ -184,7 +190,8 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 	for (i = 0; i < ss->numFaces; i++) {
 		poly = &ss->mpoly[i];
 		loop = &ss->mloop[poly->loopstart];
-		if (poly->totloop == 3) {
+		n = poly->totloop;
+		if (n == 3) {
 			// First the corner triangles
 			for (j = 0; j < 3; j++) {
 				prevJ = (j + 2) % 3;
@@ -207,9 +214,9 @@ void SL_copyNewTessFaces(SLSubSurf *ss, MFace *mfaces)
 
 			k += 1;
 		} else {
-			for (j = 0; j < poly->totloop; j++) { // Loop over each sub-quad;
+			for (j = 0; j < n; j++) { // Loop over each sub-quad;
 				// Unsure if i negative values work, adding numVerts just in case.
-				prevJ = (j - 1 + poly->totloop) % poly->totloop;
+				prevJ = (j + n - 1) % n;
 
 				mfaces[k].v1 = loop[j].v;
 				mfaces[k].v2 = loop[j].e + ss->numVerts;
@@ -238,7 +245,7 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 
 	And ngons, the natural ordering is used
 	*/
-	int i, j, k, faceVertStartIdx;
+	int i, j, k, n, faceVertStartIdx;
 	// First the original edges
 	k = 0;
 	for (i = 0; i < ss->numEdges; i++) {
@@ -261,7 +268,8 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 	for (i = 0; i < ss->numFaces; i++) {
 		MPoly *poly = &ss->mpoly[i];
 		MLoop *loop = &ss->mloop[poly->loopstart];
-		if (poly->totloop == 3) {
+		n = poly->totloop;
+		if (n == 3) {
 			medges[k+0].v1 = ss->numVerts + loop[0].e;
 			medges[k+0].v2 = ss->numVerts + loop[2].e;
 			medges[k+1].v1 = ss->numVerts + loop[0].e;
@@ -273,7 +281,7 @@ void SL_copyNewEdges(SLSubSurf *ss, MEdge *medges) {
 			//printf("medges[%d] = {%d, %d}\n", i, medges[k+2].v1, medges[k+2].v2);
 			k += 3;
 		} else {
-			for (j = 0; j < poly->totloop; j++) {
+			for (j = 0; j < n; j++) {
 				medges[k].v1 = ss->numVerts + loop[j].e;
 				medges[k].v2 = faceVertStartIdx;
 				//printf("medges[%d] = {%d, %d}\n", i, medges[k].v1, medges[k].v2);
@@ -291,10 +299,20 @@ static float  *_origCoord(SLSubSurf *ss, int vert) {
 
 /////////////////////////////////////////////////////////////
 
-SLSubSurf* SL_SubSurf_new(SLSubSurf *prev, int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
-	int i, idx, numLoops;
+#ifdef _OPENMP
+static omp_lock_t alloc_lock;
+
+static void OMP_lock_alloc_thread(void) {
+	omp_set_lock(&alloc_lock);
+}
+
+static void OMP_unlock_alloc_thread(void) {
+	omp_unset_lock(&alloc_lock);
+}
+#endif
+
+SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]) {
 	SLSubSurf *ss = (SLSubSurf*)MEM_callocN(sizeof(SLSubSurf), "slsubsurf");
-	ss->prev = prev; // Should be NULL if its the first subsurf in the modifier
 	ss->smoothing = smoothing;
 	ss->numVerts = ss->numEdges = ss->numFaces = 0;
 	
@@ -310,25 +328,57 @@ SLSubSurf* SL_SubSurf_new(SLSubSurf *prev, int smoothing, DerivedMesh *input, fl
 	ss->numVerts = input->getNumVerts(input);
 	ss->numEdges = input->getNumEdges(input);
 	ss->numFaces = input->getNumPolys(input);
-	numLoops = input->getNumLoops(input);
-	
-	ss->poly2vert = MEM_callocN(sizeof(int)*ss->numFaces, "sl poly2vert");
-	idx = ss->numVerts + ss->numEdges;
-	for (i = 0; i < ss->numFaces; i++) {
-		if (ss->mpoly[i].totloop > 3) { // Just ignoring triangles, they will not be accessed.
-			ss->poly2vert[i] = idx;
-			idx++;
-		}
-	}
-	// Necessary backwards mappings (could potentially be done without these, but that would make partial updates impossible (not that partial updates are supported yet))
-	create_vert_poly_map(&ss->vert2poly, &ss->vert2poly_mem,
-		ss->mpoly, ss->mloop, ss->numVerts, ss->numFaces, numLoops);
-	create_vert_edge_map(&ss->vert2edge, &ss->vert2edge_mem,
-		ss->medge, ss->numVerts, ss->numEdges);
-	create_edge_poly_map(&ss->edge2poly, &ss->edge2poly_mem,
-		ss->mpoly, ss->mloop, ss->numEdges, ss->numFaces, numLoops);
 
+	//SL_constructMaps(ss);
 	return ss;
+}
+
+void SL_constructMaps(SLSubSurf *ss) {
+	int i, idx, numLoops;
+	ss->poly2vert = MEM_callocN(sizeof(int)*ss->numFaces, "sl poly2vert");
+	numLoops = ss->input->getNumLoops(ss->input);
+	
+	#ifdef _OPENMP
+	omp_init_lock(&alloc_lock);
+	MEM_set_lock_callback(OMP_lock_alloc_thread, OMP_unlock_alloc_thread);
+	#endif
+	
+	#pragma omp parallel sections
+	{
+		#pragma omp section
+		{
+			idx = ss->numVerts + ss->numEdges;
+			for (i = 0; i < ss->numFaces; i++) {
+				if (ss->mpoly[i].totloop > 3) { // Just ignoring triangles, they will not be accessed.
+					ss->poly2vert[i] = idx;
+					idx++;
+				}
+			}
+		}
+		// Necessary backwards mappings (could potentially be done without these, but that would make partial updates impossible (not that partial updates are supported yet))
+		#pragma omp section
+		create_vert_poly_map(&ss->vert2poly, &ss->vert2poly_mem,
+							 ss->mpoly, ss->mloop, ss->numVerts, ss->numFaces, numLoops);
+		#pragma omp section
+		create_vert_edge_map(&ss->vert2edge, &ss->vert2edge_mem,
+							 ss->medge, ss->numVerts, ss->numEdges);
+		#pragma omp section
+		create_edge_poly_map(&ss->edge2poly, &ss->edge2poly_mem,
+							 ss->mpoly, ss->mloop, ss->numEdges, ss->numFaces, numLoops);
+	}
+	#ifdef _OPENMP
+	omp_destroy_lock(&alloc_lock);
+	#endif
+}
+
+void SL_freeMaps(SLSubSurf *ss) {
+	MEM_freeN(ss->poly2vert);
+	MEM_freeN(ss->vert2poly);
+	MEM_freeN(ss->vert2poly_mem);
+	MEM_freeN(ss->vert2edge);
+	MEM_freeN(ss->vert2edge_mem);
+	MEM_freeN(ss->edge2poly);
+	MEM_freeN(ss->edge2poly_mem);
 }
 
 // HACK: Copied from cdderivedmesh.c. I want to use the goodies from CDDM, but i need to allocate memory to fit the SLSurfSurf into the structure as well.
@@ -360,22 +410,11 @@ struct SLDerivedMesh {
 };
 
 void SL_SubSurf_free(SLSubSurf *ss) {
-	// Recursively frees;
-	if (ss->prev) {
-		// If is recursive, then the previous DM should be the SLDerivedMesh, and releasing that also calls this function.
-		ss->input->release(ss->input);
-	}
-	MEM_freeN(ss->poly2vert);
-	MEM_freeN(ss->vert2poly);
-	MEM_freeN(ss->vert2poly_mem);
-	MEM_freeN(ss->vert2edge);
-	MEM_freeN(ss->vert2edge_mem);
-	MEM_freeN(ss->edge2poly);
-	MEM_freeN(ss->edge2poly_mem);
+	//MEM_freeMaps(ss);
 	MEM_freeN(ss);
 }
 
-// A few fucntions that should be replaced from the CDDM default functions;
+// A few functions that should be replaced from the CDDM default functions;
 static void slDM_release(DerivedMesh *dm) {
 	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
 	CDDerivedMesh *cddm = (CDDerivedMesh *)dm;
@@ -391,38 +430,12 @@ static void slDM_release(DerivedMesh *dm) {
 
 //static void slDM_recalcTessellation(DerivedMesh *UNUSED(dm)) { /* Nothing to do */ }
 
-// Not sure what the bounding box should account for, both original and refined mesh makes some sense.
-// This can be done faster than the default implementation in CDDerivedMesh, but its just 1 subdivision level
-/*
-static void _minmax_v3_v3v3(const float vec[3], float min[3], float max[3]) {
-	if (min[0] > vec[0]) min[0] = vec[0];
-	if (min[1] > vec[1]) min[1] = vec[1];
-	if (min[2] > vec[2]) min[2] = vec[2];
-	if (max[0] < vec[0]) max[0] = vec[0];
-	if (max[1] < vec[1]) max[1] = vec[1];
-	if (max[2] < vec[2]) max[2] = vec[2];
-}
-static void slDM_getMinMax(DerivedMesh *dm, float min_r[3], float max_r[3]) {
-	SLDerivedMesh *sldm = (SLDerivedMesh*)dm;
-	SLSubSurf *ss = sldm->ss;
-	int i;
-	if (ss->numVerts == 0) {
-		zero_v3(min_r);
-		zero_v3(max_r);
-		return;
-	}
-	for(i = 0; i < ss->numVerts; i++) { // TODO: Should i use the smoothed coordinates(?) (does anyone care?)
-		_minmax_v3_v3v3(_origCoord(ss, i), min_r, max_r);
-	}
-}
-*/
-
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	int numVerts, numEdges, numFaces, numLoops;
-	int i, j, a, *polyidx, *input_index, *output_index;
+	int i, j, a, *input_index, *output_index;
 	SLDerivedMesh *output;
 	DerivedMesh *output_dm;
-
+	
 	numVerts = SL_giveTotalNumberOfSubVerts(ss);
 	numEdges = SL_giveTotalNumberOfSubEdges(ss);
 	numFaces = SL_giveTotalNumberOfSubFaces(ss);
@@ -440,7 +453,7 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	/* ensure these are created if they are made on demand */
 	ss->input->getVertDataArray(ss->input, CD_ORIGINDEX);
 	ss->input->getEdgeDataArray(ss->input, CD_ORIGINDEX);
-	ss->input->getTessFaceDataArray(ss->input, CD_ORIGINDEX);
+	ss->input->getTessFaceDataArray(ss->input, CD_ORIGINDEX); // TODO: Can i move this to constructTessFaces ?
 	
 	/* this does a copy of all non mvert/medge/mface layers */
 	DM_from_template(output_dm, ss->input, DM_TYPE_CDDM, numVerts, numEdges, numFaces, numLoops, numFaces);
@@ -458,9 +471,7 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 		CustomData_add_layer(&output_dm->edgeData, CD_ORIGINDEX, CD_CALLOC, NULL, numEdges);
 	if (!CustomData_get_layer(&output_dm->faceData, CD_ORIGINDEX))
 		CustomData_add_layer(&output_dm->faceData, CD_ORIGINDEX, CD_CALLOC, NULL, numFaces);
-	if (!CustomData_get_layer(&output_dm->faceData, CD_POLYINDEX))
-		CustomData_add_layer(&output_dm->faceData, CD_POLYINDEX, CD_CALLOC, NULL, numFaces);
-	
+
 	output->cddm.mvert = CustomData_get_layer(&output_dm->vertData, CD_MVERT);
 	output->cddm.medge = CustomData_get_layer(&output_dm->edgeData, CD_MEDGE);
 	output->cddm.mface = CustomData_get_layer(&output_dm->faceData, CD_MFACE);
@@ -470,61 +481,80 @@ DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss) {
 	
 	// Replace some functions from CDDM
 	//output_dm->recalcTessellation = slDM_recalcTessellation; // I could perhaps optimize some stuff here.
-	output_dm->release = slDM_release;
-	// TODO: Replace any other functions from default CDDM, perhaps?
+	output_dm->release = slDM_release; // Must be replaced since we have our own custom structure (!)
+	// TODO: Possibly replace any other functions from default CDDM for performance reasons.
 	
 	// This was done in in the CCG code, so i suppose I'll use that as well.
 	CustomData_free_layer_active(&output_dm->polyData, CD_NORMAL, output_dm->numPolyData);
 
 	// We can directly fill the structural part, which doesn't actually need the new vertex coordinates.
-	SL_copyNewPolys(ss, CDDM_get_polys(output_dm));
-	SL_copyNewLoops(ss, CDDM_get_loops(output_dm));
-	SL_copyNewEdges(ss, CDDM_get_edges(output_dm));
-	// TODO: I consider leaving everything about tesselation for CDDM
-	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output_dm));
-	/* We absolutely need that layer, else it's no valid tessellated data! */
-	polyidx = CustomData_get_layer(&output_dm->faceData, CD_POLYINDEX);
-	for (i = 0; i < numFaces; i++) polyidx[i] = i; // TODO: Check this, i think its OK. (it should just be 1 face per poly)
+	// The time spent doing this is in some cases actually quite significant, so lets OMP it up.
+	// Unfortunately, the loops in these functions themselves cannot easily be parallel, but we can at least use sections;
+	#pragma omp parallel sections
+	{
+		#pragma omp section
+		SL_copyNewPolys(ss, CDDM_get_polys(output_dm));
+		#pragma omp section
+		SL_copyNewLoops(ss, CDDM_get_loops(output_dm));
+		#pragma omp section
+		SL_copyNewEdges(ss, CDDM_get_edges(output_dm));
 
-	// ORIGININDEX vertex;
-	input_index = ss->input->getVertDataArray(ss->input, CD_ORIGINDEX);
-	output_index = CustomData_get_layer(&output_dm->vertData, CD_ORIGINDEX);
-	// original vertices are at the beginning
-	for (i = 0; i < ss->numVerts; i++) {
-		output_index[i] = input_index ? input_index[i] : i;
+		#pragma omp section
+		{
+			// ORIGININDEX vertex;
+			input_index = ss->input->getVertDataArray(ss->input, CD_ORIGINDEX);
+			output_index = CustomData_get_layer(&output_dm->vertData, CD_ORIGINDEX);
+			// original vertices are at the beginning
+			for (i = 0; i < ss->numVerts; i++) {
+				output_index[i] = input_index ? input_index[i] : i;
+			}
+			// Then new verts, no original index
+			for (; i < numVerts; i++) { // Note, keep i from previous loop.
+				output_index[i] = ORIGINDEX_NONE;
+			}
+			// ORIGININDEX edge;
+			input_index = ss->input->getEdgeDataArray(ss->input, CD_ORIGINDEX);
+			output_index = CustomData_get_layer(&output_dm->edgeData, CD_ORIGINDEX);
+			// First split edges;
+			a = 0;
+			for (i = 0; i < ss->numEdges; i++) {
+				output_index[a++] = input_index ? input_index[i] : i;
+				output_index[a++] = input_index ? input_index[i] : i;
+			}
+			// Then new internal edges
+			for (; a < numEdges; a++) { // Note, keep i from previous loop.
+				output_index[i] = ORIGINDEX_NONE;
+			}
+			// ORIGININDEX face;
+			input_index = ss->input->getTessFaceDataArray(ss->input, CD_ORIGINDEX);
+			output_index = CustomData_get_layer(&output_dm->faceData, CD_ORIGINDEX);
+			a = 0;
+			for (i = 0; i < ss->numFaces; i++) {
+				MPoly *poly = &ss->mpoly[i];
+				int internalFaces = poly->totloop == 3 ? 4 : poly->totloop;
+				for (j = 0; j < internalFaces; j++, a++)
+					output_index[a] = input_index ? input_index[i] : i;
+			}
+			// Same originindex for polys as or faces, probably.
+			//CustomData_add_layer(&output->polyData, CD_ORIGINDEX, CD_REFERENCE, NULL, numFaces);
+		}
 	}
-	// Then new verts, no original index
-	for (; i < numVerts; i++) { // Note, keep i from previous loop.
-		output_index[i] = ORIGINDEX_NONE;
-	}
-	// ORIGININDEX edge;
-	input_index = ss->input->getEdgeDataArray(ss->input, CD_ORIGINDEX);
-	output_index = CustomData_get_layer(&output_dm->edgeData, CD_ORIGINDEX);
-	// First split edges;
-	a = 0;
-	for (i = 0; i < ss->numEdges; i++) {
-		output_index[a++] = input_index ? input_index[i] : i;
-		output_index[a++] = input_index ? input_index[i] : i;
-	}
-	// Then new internal edges
-	for (; a < numEdges; a++) { // Note, keep i from previous loop.
-		output_index[i] = ORIGINDEX_NONE;
-	}
-	// ORIGININDEX face;
-	input_index = ss->input->getTessFaceDataArray(ss->input, CD_ORIGINDEX);
-	output_index = CustomData_get_layer(&output_dm->faceData, CD_ORIGINDEX);
-	a = 0;
-	for (i = 0; i < ss->numFaces; i++) {
-		MPoly *poly = &ss->mpoly[i];
-		int internalFaces = poly->totloop == 3 ? 4 : poly->totloop;
-		for (j = 0; j < internalFaces; j++, a++)
-			output_index[a] = input_index ? input_index[i] : i;
-	}
-	// TODO: Not sure why this isn't needed (?)
-	//CustomData_add_layer(&output->polyData, CD_ORIGINDEX, CD_CALLOC, NULL, numPolys);
-	//CustomData_get_layer(&output->polyData, CD_ORIGINDEX);
-	
 	return output_dm;
+}
+
+
+void SL_constructTessFaces(SLSubSurf *ss, DerivedMesh *output) {
+	int i, numFaces, *polyidx;
+	// TODO: I consider leaving everything about tesselation for CDDM
+	SL_copyNewTessFaces(ss, CDDM_get_tessfaces(output));
+	
+	numFaces = output->getNumPolys(output); //SL_giveTotalNumberOfSubFaces(ss);
+	
+	if (!CustomData_get_layer(&output->faceData, CD_POLYINDEX))
+		CustomData_add_layer(&output->faceData, CD_POLYINDEX, CD_CALLOC, NULL, numFaces);
+	/* We absolutely need that layer, else it's no valid tessellated data! */
+	polyidx = CustomData_get_layer(&output->faceData, CD_POLYINDEX);
+	for (i = 0; i < numFaces; i++) polyidx[i] = i; // TODO: Check this, i think its OK. (it should just be 1 face per poly)
 }
 
 /////////////////////////////////////////////////////////////
@@ -579,6 +609,8 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 	// When computing the smoothing part, we need to keep track of both, so we can't use o_vert->co directly.
 	float (*eco)[3] = MEM_callocN(sizeof(float[3])*ss->numEdges, "sl edge centroids");
 
+	SL_constructMaps(ss); // Can be stored a-priori if the modifier structure supported partial updates;
+	
 	// Compute centroid, used for smoothing and other things;
 	//printf("Computing face centroids\n");
 	// Perhaps i need to split the function for faceVertIdx to deal with this.
@@ -644,7 +676,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 				// This is just for smoothing the UV coordinates (?)
 				//if ( (edge->flag & ME_SEAM) && e2p->count < 2)
 				//	seamCount++;
-				if (ss->medge[e].crease != 0) {
+				if (edge->crease != 0) {
 					sharpnessCount++;
 					avgSharpness += ss->medge[e].crease / 255.f;
 				}
@@ -869,6 +901,7 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 	}*/
 	
 	MEM_freeN(eco);
+	SL_freeMaps(ss); // Can be stored a-priori if the modifier structure supported partial updates;
 }
 
 // Syncs the UV coordinates for layer n

@@ -53,14 +53,14 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	SubsurfFlags flags)
 {
 	SLSubSurf *ss;
-	int i;
+	int i,j;
 	int numCol, numTex;
 	int levels;
 	int smoothing = smd->subdivType == ME_SL_SUBSURF;
 	int useSubsurfUv = smd->flags & eSubsurfModifierFlag_SubsurfUv;
 	// TODO drawInterior
 	//int drawInteriorEdges = !(smd->flags & eSubsurfModifierFlag_ControlEdges);
-	DerivedMesh *result;
+	DerivedMesh *result, *prevResult;
 	
 	// We don't use caches for this modifier
 	if (smd->emCache) {
@@ -78,104 +78,33 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	else /*if (flags & SUBSURF_FOR_EDIT_MODE)*/ {
 		levels = (smd->modifier.scene) ? get_render_subsurf_level(&smd->modifier.scene->r, smd->levels) : smd->levels;
 	}
-	// Not sure if this is acceptable;
+	// Not sure if this is acceptable, but it needs to be dealt with:
 	if (levels == 0) return input;
 
-	ss = NULL;
-	result = input;
+	prevResult = input;
 	for (i = 0; i < levels; i++) {
-		ss = SL_SubSurf_new(ss, smoothing, result, vertCos);
+		ss = SL_SubSurf_new(smoothing, prevResult, vertCos);
 		result = SL_SubSurf_constructOutput(ss);
 		SL_syncVerts(ss, result);
+		numCol = CustomData_number_of_layers(&input->loopData, CD_MLOOPCOL);
+		for (j = 0; j < numCol; j++) {
+			SL_syncPaint(ss, result, j);
+		}
+		numTex = CustomData_number_of_layers(&input->loopData, CD_MLOOPUV);
+		for (j = 0; j < numTex; j++) {
+			SL_syncUV(ss, result, useSubsurfUv, j);
+		}
+		if (prevResult != input) {
+			prevResult->release(prevResult);
+		}
+		prevResult = result;
 	}
-	numCol = CustomData_number_of_layers(&input->loopData, CD_MLOOPCOL);
-	for (i = 0; i < numCol; i++) {
-		SL_syncPaint(ss, result, i);
-	}
-	numTex = CustomData_number_of_layers(&input->loopData, CD_MLOOPUV);
-	for (i = 0; i < numTex; i++) {
-		SL_syncUV(ss, result, useSubsurfUv, i);
-	}
-	result->calcNormals(result);
-	result->recalcTessellation(result);
+	// We know the what the output DM contains, so we can optimize the tess face generation;
+	SL_constructTessFaces(ss, result);
+	// TODO: All poly custom data should be copied over to tess faces as CD_REFERENCE, which would save time and memory.
+	// TODO: We really need to work out what to do with calcNormals, which take up a significant time;
+	//result->calcNormals(result);
+	//result->recalcTessellation(result);
 	
 	return result;
 }
-
-#if 0
-
-// End of drawing functions
-
-static SLDerivedMesh *getSLDerivedMesh(SLSubSurf *ss,
-									   int drawInteriorEdges,
-									   int useSubsurfUv,
-									   DerivedMesh *source_dm)
-{
-	SLDerivedMesh *ssdm = MEM_callocN(sizeof(*ssdm), "sldm");
-	DerivedMesh *newdm;
-	int totsubvert, totsubedge, totsubface, totsubloop;
-	int numTex, numCol;
-	int hasPCol, hasOrigSpace;
-	int *polyidx;
-	int i;
-
-	ssdm->ss = ss;
-	ssdm->drawInteriorEdges = drawInteriorEdges;
-	//ssdm->useSubsurfUv = useSubsurfUv;
-	newdm = &(ssdm->dm);
-	for (i = 0; i < sizeof(newdm); i++) {
-		((char*)newdm)[i] = 0; // Nulling everything
-	}
-
-	//DM_init_funcs(newdm); // Sets some default functions we don't care/need to overload.
-
-	totsubvert = SL_giveTotalNumberOfSubVerts(ss);
-	totsubedge = SL_giveTotalNumberOfSubEdges(ss);
-	totsubface = SL_giveTotalNumberOfSubFaces(ss);
-	totsubloop = SL_giveTotalNumberOfSubLoops(ss);
-
-	DM_from_template(newdm, source_dm, DM_TYPE_CCGDM, // TODO Change type; (general subsurf-type perhaps?)
-					totsubvert,
-					totsubedge,
-					totsubface, // faces
-					totsubloop, // loops TODO: unsure
-					totsubface); // polys TODO: unsure
-
-	CustomData_free_layer_active(&newdm->polyData, CD_NORMAL,
-								 newdm->numPolyData);
-
-	numTex = CustomData_number_of_layers(&newdm->loopData, CD_MLOOPUV);
-	numCol = CustomData_number_of_layers(&newdm->loopData, CD_MLOOPCOL);
-	hasPCol = CustomData_has_layer(&newdm->loopData, CD_PREVIEW_MLOOPCOL);
-	hasOrigSpace = CustomData_has_layer(&newdm->loopData, CD_ORIGSPACE_MLOOP);
-
-	if (
-		(numTex && CustomData_number_of_layers(&newdm->faceData, CD_MTFACE) != numTex)  ||
-		(numCol && CustomData_number_of_layers(&newdm->faceData, CD_MCOL) != numCol)    ||
-		(hasPCol && !CustomData_has_layer(&newdm->faceData, CD_PREVIEW_MCOL))           ||
-		(hasOrigSpace && !CustomData_has_layer(&newdm->faceData, CD_ORIGSPACE)) )
-	{
-		CustomData_from_bmeshpoly(&newdm->faceData,
-								  &newdm->polyData,
-								  &newdm->loopData,
-								  totsubface);
-	}
-
-	// TODO: deal with uv's..
-#if 0
-	if (useSubsurfUv) {
-		CustomData *ldata = &newdm->loopData;
-		CustomData *dmldata = &source_dm->loopData;
-		int numlayer = CustomData_number_of_layers(ldata, CD_MLOOPUV);
-		int dmnumlayer = CustomData_number_of_layers(dmldata, CD_MLOOPUV);
-
-		for (i = 0; i < numlayer && i < dmnumlayer; i++)
-			set_subsurf_uv(ss, source_dm, newdm, i);
-	}
-#endif
-
-	/* All tessellated CD layers were updated! */
-	newdm->dirty &= ~DM_DIRTY_TESS_CDLAYERS;
-	return ssdm;
-}
-#endif
