@@ -83,9 +83,9 @@ void SL_getMinMax(SLSubSurf *ss, float min_r[3], float max_r[3]);
 // These two functions could (should?) be merged.
 SLSubSurf* SL_SubSurf_new(int smoothing, DerivedMesh *input, float (*vertexCos)[3]);
 DerivedMesh *SL_SubSurf_constructOutput(SLSubSurf *ss);
-// This is separated because it only needs to be called by the last subsurf in the chain.
-void SL_constructTessFaces(SLSubSurf *ss, DerivedMesh *output);
+void slDM_constructTessFaces(DerivedMesh *output);
 void SL_SubSurf_free(SLSubSurf *ss);
+
 
 // After setup, the syncing functions can be called multiple times and will replace in-memory structures, whether it be new paint, new coordinates or 
 void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output);

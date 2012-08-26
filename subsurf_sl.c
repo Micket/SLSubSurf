@@ -81,8 +81,14 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 	// Not sure if this is acceptable, but it needs to be dealt with:
 	if (levels == 0) return input;
 
+	// Now create the structures recursively, freeing all the middle steps (this gets a bit messy...)
 	prevResult = input;
 	for (i = 0; i < levels; i++) {
+		if (i == 0) {
+			prevResult = input;
+		} else {
+			prevResult = result;
+		}
 		ss = SL_SubSurf_new(smoothing, prevResult, vertCos);
 		result = SL_SubSurf_constructOutput(ss);
 		SL_syncVerts(ss, result);
@@ -94,19 +100,18 @@ struct DerivedMesh *sl_subsurf_make_derived_from_derived(
 		for (j = 0; j < numTex; j++) {
 			SL_syncUV(ss, result, useSubsurfUv, j);
 		}
-		if (prevResult != input) {
+		if (prevResult != input && i < levels - 1) { // We are not allowed to remove the input DM, and not the last DM either (we need to tesselate)
 			prevResult->release(prevResult);
 		}
-		prevResult = result;
 	}
 	// We know the what the output DM contains, so we can optimize the tess face generation;
-	SL_constructTessFaces(ss, result);
-	
-	// Not clear where this should be done. Its inconsistent if its in object mode vs edit mode.
-	result->calcNormals(result);
-	
+	//slDM_constructTessFaces(result);
 	// TODO: All poly custom data should be copied over to tess faces as CD_REFERENCE, which would save time and memory.
 	//result->recalcTessellation(result);
+	slDM_constructTessFaces(result);
+	if (prevResult != input) { // We are not allowed to remove the input DM, and not the last DM either (we need to tesselate)
+		prevResult->release(prevResult);
+	}
 	
 	return result;
 }
