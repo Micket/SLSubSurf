@@ -945,6 +945,39 @@ void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output) {
 	MEM_freeN(eco);
 }
 
+
+void SL_syncVertData(SLSubSurf *ss, DerivedMesh *output) {
+	int i, j, k;
+	float w[2] = {0.5,0.5}; // Always 0.5 for edges.
+
+	DM_copy_vert_data(ss->input, output, 0, 0, ss->numVerts);
+	
+	k = ss->numVerts;
+	for (i = 0; i < ss->numEdges; i++) {
+		MEdge *edge = &ss->medge[i];
+		// TODO: This function should take unsigned ints.
+		DM_interp_vert_data(ss->input, output, (int*)&edge->v1, w, 2, k);
+		k++;
+	}
+	
+	for (i = 0; i < ss->numFaces; i++) {
+		MPoly *poly = &ss->mpoly[i];
+		int n = poly->totloop;
+		if (n > 3) {
+			MLoop *loop = &ss->mloop[poly->loopstart];
+			int index2[n];
+			float weight = 1.0f / n;
+			float w2[n];
+			for (j = 0; j < n; j++) {
+				w2[j] = weight;
+				index2[j] = loop[j].v;
+			}
+			DM_interp_vert_data(ss->input, output, index2, w2, n, k);
+			k++;
+		}
+	}
+}
+
 // Syncs the UV coordinates for layer n
 void SL_syncUV(SLSubSurf *ss, DerivedMesh *output, int UNUSED(smoothing), int n) {
 	// TODO: Support smoothing subsurf uvs
@@ -1027,10 +1060,10 @@ void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n) {
 			char a[3], r[3], g[3], b[3];
 			for (j = 0; j < 3; j++) {
 				int k = (j + 1) % 3;
-				a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
-				r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
-				g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
-				b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
+				a[j] = (char)(((short)loop[k].a + (short)loop[j].a) >> 1);
+				r[j] = (char)(((short)loop[k].r + (short)loop[j].r) >> 1);
+				g[j] = (char)(((short)loop[k].g + (short)loop[j].g) >> 1);
+				b[j] = (char)(((short)loop[k].b + (short)loop[j].b) >> 1);
 			}
 			
 			// Outer triangles first;
@@ -1047,6 +1080,7 @@ void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n) {
 		} else {
 			int n = poly->totloop;
 			// Center color;
+			float w = 1.0f / n;
 			char ca, cr, cg, cb;
 			float fca = 0, fcr = 0, fcg = 0, fcb = 0;
 			// Edge color;
@@ -1054,12 +1088,12 @@ void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n) {
 			for (j = 0; j < n; j++) {
 				int k = (j + 1) % n;
 				fca += loop[j].a; fcr += loop[j].r; fcg += loop[j].g; fcb += loop[j].b;
-				a[j] = (char)(((float)loop[k].a + (float)loop[j].a)*0.5f);
-				r[j] = (char)(((float)loop[k].r + (float)loop[j].r)*0.5f);
-				g[j] = (char)(((float)loop[k].g + (float)loop[j].g)*0.5f);
-				b[j] = (char)(((float)loop[k].b + (float)loop[j].b)*0.5f);
+				a[j] = (char)(((short)loop[k].a + (short)loop[j].a) >> 1);
+				r[j] = (char)(((short)loop[k].r + (short)loop[j].r) >> 1);
+				g[j] = (char)(((short)loop[k].g + (short)loop[j].g) >> 1);
+				b[j] = (char)(((short)loop[k].b + (short)loop[j].b) >> 1);
 			}
-			ca = (char)(fca/n); cr = (char)(fcr/n); cg = (char)(fcg/n); cb = (char)(fcb/n);
+			ca = (char)(fca*w); cr = (char)(fcr*w); cg = (char)(fcg*w); cb = (char)(fcb*w);
 			//printf("center color = %d, %d, %d, %d\n", ca, cr, cg, cb);
 			// Now construct the loops, which all start from the corner node
 			for (j = 0; j < n; j++) {

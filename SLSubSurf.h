@@ -89,5 +89,6 @@ void SL_SubSurf_free(SLSubSurf *ss);
 
 // After setup, the syncing functions can be called multiple times and will replace in-memory structures, whether it be new paint, new coordinates or 
 void SL_syncVerts(SLSubSurf *ss, DerivedMesh *output);
+void SL_syncVertData(SLSubSurf *ss, DerivedMesh *output);
 void SL_syncUV(SLSubSurf *ss, DerivedMesh *output, int useSubsurfUv, int n);
 void SL_syncPaint(SLSubSurf *ss, DerivedMesh *output, int n);
